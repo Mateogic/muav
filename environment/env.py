@@ -2,7 +2,7 @@ from environment.user_equipments import UE
 from environment.uavs import UAV
 import config
 import numpy as np
-
+# 基于强化学习框架，模拟多无人机（UAV）移动边缘计算环境，管理 UAV、用户设备（UE）和宏基站（MBS）的状态、动作和奖励。
 
 class Env:
     def __init__(self) -> None:
@@ -147,9 +147,17 @@ class Env:
                         self._uavs[i].collision_violation = True
                         self._uavs[j].collision_violation = True
                         collision_detected_in_iter = True
-                        dist: float = np.sqrt(dist_sq) if dist_sq > 0 else config.EPSILON
+                        
+                        dist: float = np.sqrt(dist_sq)
+                        if dist < config.EPSILON:
+                            # If positions are identical, apply random direction
+                            direction = np.random.randn(2)
+                            direction /= (np.linalg.norm(direction) + config.EPSILON)
+                            dist = config.EPSILON
+                        else:
+                            direction = (pos_i - pos_j) / dist
+                            
                         overlap: float = config.MIN_UAV_SEPARATION - dist
-                        direction: np.ndarray = (pos_i - pos_j) / dist
                         next_positions[i] += direction * overlap * 0.5
                         next_positions[j] -= direction * overlap * 0.5
             if not collision_detected_in_iter:

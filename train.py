@@ -46,7 +46,10 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
             next_obs, rewards, (total_latency, total_energy, jfi) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
             next_state: np.ndarray = np.concatenate(next_obs, axis=0)
-            done: bool = step >= config.PPO_ROLLOUT_LENGTH
+            # For time-limit truncation, we should not treat the episode as "done" for the value update.
+            # We want to bootstrap from the next state's value.
+            # Only use done=True if the episode terminated due to failure/completion, not timeout.
+            done: bool = False 
             buffer.add(state, obs_arr, actions, log_probs, rewards, done, value)
 
             obs = next_obs
@@ -109,7 +112,9 @@ def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: i
 
             next_obs, rewards, (total_latency, total_energy, jfi) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
-            done: bool = step >= config.STEPS_PER_EPISODE
+            
+            # For time-limit truncation, we should not treat the episode as "done" for the value update.
+            done: bool = False
             buffer.add(obs, actions, rewards, next_obs, done)
 
             if total_step_count > config.INITIAL_RANDOM_STEPS and step % config.LEARN_FREQ == 0 and len(buffer) > config.REPLAY_BATCH_SIZE:

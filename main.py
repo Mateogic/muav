@@ -10,6 +10,7 @@ import torch
 import numpy as np
 import argparse
 import warnings
+import os
 from datetime import datetime
 
 
@@ -79,6 +80,7 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest="mode", required=True)
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument("--num_episodes", type=int, required=True)
+    parent_parser.add_argument("--gpu_id", type=str, default=None, help="GPU ID to use (e.g., '0', '1')")
     train_parser = subparsers.add_parser("train", parents=[parent_parser])
     train_parser.add_argument("--resume_path", type=str, default=None)
     train_parser.add_argument("--config_path", type=str, default=None)
@@ -88,6 +90,10 @@ if __name__ == "__main__":
     test_parser.add_argument("--config_path", type=str, required=True)
 
     args = parser.parse_args()
+
+    if args.gpu_id is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
+
     if args.mode == "train":
         start_training(args)
     elif args.mode == "test":

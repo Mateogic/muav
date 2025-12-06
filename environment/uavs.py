@@ -3,7 +3,7 @@ from environment.user_equipments import UE
 from environment import comm_model as comms
 import config
 import numpy as np
-
+# 模拟无人机（UAV）在移动边缘计算环境中的行为。它管理 UAV 的位置、缓存、通信、能量消耗和请求处理。
 
 def _get_computing_latency_and_energy(uav: UAV, cpu_cycles: int) -> tuple[float, float]:
     """Calculate computing latency and energy for a UAV processing request."""
