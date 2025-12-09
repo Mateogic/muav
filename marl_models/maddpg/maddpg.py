@@ -22,8 +22,8 @@ class MADDPG(MARLModel):
         self._init_target_networks()
 
         # Create optimizers
-        self.actor_optimizers: list[torch.optim.Adam] = [torch.optim.Adam(actor.parameters(), lr=config.ACTOR_LR) for actor in self.actors]
-        self.critic_optimizers: list[torch.optim.Adam] = [torch.optim.Adam(critic.parameters(), lr=config.CRITIC_LR) for critic in self.critics]
+        self.actor_optimizers: list[torch.optim.AdamW] = [torch.optim.AdamW(actor.parameters(), lr=config.ACTOR_LR) for actor in self.actors]
+        self.critic_optimizers: list[torch.optim.AdamW] = [torch.optim.AdamW(critic.parameters(), lr=config.CRITIC_LR) for critic in self.critics]
 
         # Exploration Noise
         self.noise: list[GaussianNoise] = [GaussianNoise() for _ in range(num_agents)]
