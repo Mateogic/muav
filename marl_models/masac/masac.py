@@ -25,15 +25,15 @@ class MASAC(MARLModel):
         self._init_target_networks()
 
         # Create Optimizers
-        self.actor_optimizers: list[torch.optim.Adam] = [torch.optim.Adam(actor.parameters(), lr=config.ACTOR_LR) for actor in self.actors]
-        self.critic_1_optimizers: list[torch.optim.Adam] = [torch.optim.Adam(critic.parameters(), lr=config.CRITIC_LR) for critic in self.critics_1]
-        self.critic_2_optimizers: list[torch.optim.Adam] = [torch.optim.Adam(critic.parameters(), lr=config.CRITIC_LR) for critic in self.critics_2]
+        self.actor_optimizers: list[torch.optim.AdamW] = [torch.optim.AdamW(actor.parameters(), lr=config.ACTOR_LR) for actor in self.actors]
+        self.critic_1_optimizers: list[torch.optim.AdamW] = [torch.optim.AdamW(critic.parameters(), lr=config.CRITIC_LR) for critic in self.critics_1]
+        self.critic_2_optimizers: list[torch.optim.AdamW] = [torch.optim.AdamW(critic.parameters(), lr=config.CRITIC_LR) for critic in self.critics_2]
 
         # Automatic Entropy Tuning
         # Use a more conservative target entropy: -dim(A) is the standard heuristic
         self.target_entropy: float = -float(action_dim)
         self.log_alphas: list[torch.Tensor] = [torch.zeros(1, requires_grad=True, device=device) for _ in range(num_agents)]
-        self.alpha_optimizers: list[torch.optim.Adam] = [torch.optim.Adam([log_alpha], lr=config.ALPHA_LR) for log_alpha in self.log_alphas]
+        self.alpha_optimizers: list[torch.optim.AdamW] = [torch.optim.AdamW([log_alpha], lr=config.ALPHA_LR) for log_alpha in self.log_alphas]
 
     def select_actions(self, observations: list[np.ndarray], exploration: bool) -> np.ndarray:
         actions: list[np.ndarray] = []

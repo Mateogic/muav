@@ -17,8 +17,8 @@ class MAPPO(MARLModel):
         self.critics: CriticNetwork = CriticNetwork(state_dim, num_agents).to(device)
 
         # Create optimizers
-        self.actor_optimizer: torch.optim.Adam = torch.optim.Adam(self.actors.parameters(), lr=config.ACTOR_LR)
-        self.critic_optimizer: torch.optim.Adam = torch.optim.Adam(self.critics.parameters(), lr=config.CRITIC_LR)
+        self.actor_optimizer: torch.optim.AdamW = torch.optim.AdamW(self.actors.parameters(), lr=config.ACTOR_LR)
+        self.critic_optimizer: torch.optim.AdamW = torch.optim.AdamW(self.critics.parameters(), lr=config.CRITIC_LR)
 
     def select_actions(self, observations: list[np.ndarray], exploration: bool) -> np.ndarray:
         obs_tensor: torch.Tensor = torch.as_tensor(np.array(observations), dtype=torch.float32, device=self.device)
