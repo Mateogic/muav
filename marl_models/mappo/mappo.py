@@ -21,22 +21,25 @@ class MAPPO(MARLModel):
         self.critic_optimizer: torch.optim.AdamW = torch.optim.AdamW(self.critics.parameters(), lr=config.CRITIC_LR)
 
     def select_actions(self, observations: list[np.ndarray], exploration: bool) -> np.ndarray:
-        obs_tensor: torch.Tensor = torch.as_tensor(np.array(observations), dtype=torch.float32, device=self.device)
+        # Convert observations to tensor once (avoid repeated conversions)
+        obs_array: np.ndarray = np.array(observations, dtype=np.float32)
+        obs_tensor: torch.Tensor = torch.from_numpy(obs_array).to(self.device, non_blocking=True)
         with torch.no_grad():
             dist: Normal = self.actors(obs_tensor)
             if exploration:
                 actions: torch.Tensor = dist.sample()  # Stochastic actions for exploration
             else:
                 actions = dist.mean  # Deterministic actions for evaluation
+            # Clip on GPU before transferring to CPU
+            actions = torch.clamp(actions, -1.0, 1.0)
 
-        # Clip actions to be within the valid range [-1, 1]
-        # Note: PPO uses unbounded Gaussian, then clips. This is correct approach.
-        return np.clip(actions.cpu().numpy(), -1.0, 1.0)
+        return actions.cpu().numpy()
 
     def get_action_and_value(self, obs: np.ndarray, state: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Sample raw actions for PPO; caller is responsible for clipping before env step."""
-        obs_tensor: torch.Tensor = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
-        state_tensor: torch.Tensor = torch.as_tensor(state, dtype=torch.float32, device=self.device)
+        # Use non_blocking for async data transfer
+        obs_tensor: torch.Tensor = torch.from_numpy(obs.astype(np.float32)).to(self.device, non_blocking=True)
+        state_tensor: torch.Tensor = torch.from_numpy(state.astype(np.float32)).to(self.device, non_blocking=True)
 
         with torch.no_grad():
             dist: Normal = self.actors(obs_tensor)
@@ -92,16 +95,18 @@ class MAPPO(MARLModel):
         entropy_loss: torch.Tensor = dist.entropy().mean()
         actor_loss -= config.PPO_ENTROPY_COEF * entropy_loss
 
-        # Update Actor
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
+        # Combined update: zero gradients once, compute both losses, then step
+        # Using set_to_none=True is faster than setting to zero
+        self.actor_optimizer.zero_grad(set_to_none=True)
+        self.critic_optimizer.zero_grad(set_to_none=True)
+        
+        # Combined backward pass for better GPU utilization
+        total_loss: torch.Tensor = actor_loss + critic_loss
+        total_loss.backward()
+        
         torch.nn.utils.clip_grad_norm_(self.actors.parameters(), config.MAX_GRAD_NORM)
-        self.actor_optimizer.step()
-
-        # Update Critic
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critics.parameters(), config.MAX_GRAD_NORM)
+        self.actor_optimizer.step()
         self.critic_optimizer.step()
 
     def reset(self) -> None:

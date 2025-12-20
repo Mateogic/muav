@@ -98,20 +98,31 @@ class RolloutBuffer:
         agent_indices: np.ndarray = np.tile(np.arange(self.num_agents), self.buffer_size)
 
         indices: np.ndarray = np.random.permutation(num_samples)
+        
+        # Pre-convert all data to tensors on GPU for faster batching
+        states_tensor: torch.Tensor = torch.from_numpy(states).to(self.device, non_blocking=True)
+        obs_tensor: torch.Tensor = torch.from_numpy(obs).to(self.device, non_blocking=True)
+        actions_tensor: torch.Tensor = torch.from_numpy(actions).to(self.device, non_blocking=True)
+        log_probs_tensor: torch.Tensor = torch.from_numpy(log_probs).to(self.device, non_blocking=True)
+        advantages_tensor: torch.Tensor = torch.from_numpy(advantages).to(self.device, non_blocking=True)
+        returns_tensor: torch.Tensor = torch.from_numpy(returns).to(self.device, non_blocking=True)
+        values_tensor: torch.Tensor = torch.from_numpy(values).to(self.device, non_blocking=True)
+        agent_indices_tensor: torch.Tensor = torch.from_numpy(agent_indices).to(self.device, non_blocking=True)
 
         for start in range(0, num_samples, batch_size):
             end: int = start + batch_size
             batch_indices: np.ndarray = indices[start:end]
+            batch_idx_tensor: torch.Tensor = torch.from_numpy(batch_indices).to(self.device, non_blocking=True)
 
             yield {
-                "states": torch.as_tensor(states[batch_indices], device=self.device),
-                "obs": torch.as_tensor(obs[batch_indices], device=self.device),
-                "actions": torch.as_tensor(actions[batch_indices], device=self.device),
-                "old_log_probs": torch.as_tensor(log_probs[batch_indices], device=self.device),
-                "advantages": torch.as_tensor(advantages[batch_indices], device=self.device),
-                "returns": torch.as_tensor(returns[batch_indices], device=self.device),
-                "old_values": torch.as_tensor(values[batch_indices], device=self.device),
-                "agent_indices": torch.as_tensor(agent_indices[batch_indices], device=self.device),
+                "states": states_tensor[batch_idx_tensor],
+                "obs": obs_tensor[batch_idx_tensor],
+                "actions": actions_tensor[batch_idx_tensor],
+                "old_log_probs": log_probs_tensor[batch_idx_tensor],
+                "advantages": advantages_tensor[batch_idx_tensor],
+                "returns": returns_tensor[batch_idx_tensor],
+                "old_values": values_tensor[batch_idx_tensor],
+                "agent_indices": agent_indices_tensor[batch_idx_tensor],
             }
 
     def clear(self) -> None:

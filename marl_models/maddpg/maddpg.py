@@ -29,16 +29,19 @@ class MADDPG(MARLModel):
         self.noise: list[GaussianNoise] = [GaussianNoise() for _ in range(num_agents)]
 
     def select_actions(self, observations: list[np.ndarray], exploration: bool) -> np.ndarray:
+        # Batch all observations and process together for better GPU utilization
+        obs_array: np.ndarray = np.array(observations, dtype=np.float32)
+        obs_tensor: torch.Tensor = torch.from_numpy(obs_array).to(self.device, non_blocking=True)
+        
         actions: list[np.ndarray] = []
         with torch.no_grad():
-            for i, obs in enumerate(observations):
-                obs_tensor: torch.Tensor = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-                action: np.ndarray = self.actors[i](obs_tensor).squeeze(0).cpu().numpy()
-
+            for i in range(self.num_agents):
+                action: torch.Tensor = self.actors[i](obs_tensor[i:i+1]).squeeze(0)
                 if exploration:
-                    action += self.noise[i].sample()
-
-                actions.append(np.clip(action, -1.0, 1.0))
+                    action_np: np.ndarray = action.cpu().numpy() + self.noise[i].sample()
+                else:
+                    action_np = action.cpu().numpy()
+                actions.append(np.clip(action_np, -1.0, 1.0))
 
         return np.array(actions)
 
@@ -69,7 +72,7 @@ class MADDPG(MARLModel):
             current_q_value: torch.Tensor = self.critics[agent_idx](obs_flat, actions_flat)
 
             critic_loss: torch.Tensor = F.mse_loss(current_q_value, y)
-            self.critic_optimizers[agent_idx].zero_grad()
+            self.critic_optimizers[agent_idx].zero_grad(set_to_none=True)
             critic_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.critics[agent_idx].parameters(), config.MAX_GRAD_NORM)
             self.critic_optimizers[agent_idx].step()
@@ -80,7 +83,7 @@ class MADDPG(MARLModel):
             pred_actions_flat: torch.Tensor = pred_actions_tensor.reshape(batch_size, -1)
 
             actor_loss: torch.Tensor = -self.critics[agent_idx](obs_flat, pred_actions_flat).mean()
-            self.actor_optimizers[agent_idx].zero_grad()
+            self.actor_optimizers[agent_idx].zero_grad(set_to_none=True)
             actor_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.actors[agent_idx].parameters(), config.MAX_GRAD_NORM)
             self.actor_optimizers[agent_idx].step()

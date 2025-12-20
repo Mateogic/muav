@@ -36,16 +36,19 @@ class MASAC(MARLModel):
         self.alpha_optimizers: list[torch.optim.AdamW] = [torch.optim.AdamW([log_alpha], lr=config.ALPHA_LR) for log_alpha in self.log_alphas]
 
     def select_actions(self, observations: list[np.ndarray], exploration: bool) -> np.ndarray:
+        # Batch observations for better GPU utilization
+        obs_array: np.ndarray = np.array(observations, dtype=np.float32)
+        obs_tensor: torch.Tensor = torch.from_numpy(obs_array).to(self.device, non_blocking=True)
+        
         actions: list[np.ndarray] = []
         with torch.no_grad():
-            for i, obs in enumerate(observations):
-                obs_tensor: torch.Tensor = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+            for i in range(self.num_agents):
                 if exploration:
-                    action, _ = self.actors[i].sample(obs_tensor)
+                    action, _ = self.actors[i].sample(obs_tensor[i:i+1])
                 else:
                     # For testing, use the mean of the distribution (deterministic policy)
                     # Note: sample() already applies tanh, so for consistency we do the same
-                    mean, log_std = self.actors[i](obs_tensor)
+                    mean, log_std = self.actors[i](obs_tensor[i:i+1])
                     # Use mean of pre-tanh distribution, then apply tanh (consistent with training)
                     action = torch.tanh(mean)
                 actions.append(action.squeeze(0).cpu().numpy())
@@ -100,16 +103,14 @@ class MASAC(MARLModel):
             critic_1_loss: torch.Tensor = F.smooth_l1_loss(current_q1, y)
             critic_2_loss: torch.Tensor = F.smooth_l1_loss(current_q2, y)
 
-            # Update critic 1
-            self.critic_1_optimizers[agent_idx].zero_grad()
-            critic_1_loss.backward()
+            # Combined critic update for better GPU utilization
+            self.critic_1_optimizers[agent_idx].zero_grad(set_to_none=True)
+            self.critic_2_optimizers[agent_idx].zero_grad(set_to_none=True)
+            combined_critic_loss: torch.Tensor = critic_1_loss + critic_2_loss
+            combined_critic_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.critics_1[agent_idx].parameters(), config.MAX_GRAD_NORM)
-            self.critic_1_optimizers[agent_idx].step()
-
-            # Update critic 2
-            self.critic_2_optimizers[agent_idx].zero_grad()
-            critic_2_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.critics_2[agent_idx].parameters(), config.MAX_GRAD_NORM)
+            self.critic_1_optimizers[agent_idx].step()
             self.critic_2_optimizers[agent_idx].step()
 
             # Update Actor and Alpha
@@ -134,14 +135,14 @@ class MASAC(MARLModel):
 
             # Standard SAC actor loss: maximize Q value while minimizing entropy
             actor_loss: torch.Tensor = (agent_log_prob * alpha.detach() - min_q_pred).mean()
-            self.actor_optimizers[agent_idx].zero_grad()
+            self.actor_optimizers[agent_idx].zero_grad(set_to_none=True)
             actor_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.actors[agent_idx].parameters(), config.MAX_GRAD_NORM)
             self.actor_optimizers[agent_idx].step()
 
             # Update alpha (temperature)
             alpha_loss: torch.Tensor = -(self.log_alphas[agent_idx] * (agent_log_prob + self.target_entropy).detach()).mean()
-            self.alpha_optimizers[agent_idx].zero_grad()
+            self.alpha_optimizers[agent_idx].zero_grad(set_to_none=True)
             alpha_loss.backward()
             self.alpha_optimizers[agent_idx].step()
 

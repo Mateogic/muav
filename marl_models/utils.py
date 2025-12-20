@@ -9,9 +9,25 @@ import torch
 import os
 
 
+def init_gpu_optimizations() -> None:
+    """Initialize GPU optimizations for better performance."""
+    if torch.cuda.is_available():
+        # Enable TensorFloat-32 for Ampere+ GPUs (significant speedup with minimal precision loss)
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        # Enable cuDNN autotuner to find the best algorithm for your hardware
+        torch.backends.cudnn.benchmark = True
+        # Disable debug mode for faster execution
+        torch.autograd.set_detect_anomaly(False)
+        torch.autograd.profiler.profile(enabled=False)
+        torch.autograd.profiler.emit_nvtx(enabled=False)
+        print("✅ GPU optimizations enabled (TF32, cuDNN benchmark)")
+
+
 def get_device() -> str:
     """Check if GPU is available and set device accordingly."""
     if torch.cuda.is_available():
+        init_gpu_optimizations()
         print("\nFound GPU, using CUDA.\n")
         return "cuda"
     elif torch.backends.mps.is_available():

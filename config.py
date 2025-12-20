@@ -8,7 +8,7 @@ SEED: int = 1234  # random seed for reproducibility
 _config_rng = np.random.RandomState(SEED)
 STEPS_PER_EPISODE: int = 1000  # total T
 LOG_FREQ: int = 10  # episodes
-IMG_FREQ: int = 100  # steps
+IMG_FREQ: int = 500  # steps (increased from 100 to reduce I/O overhead)
 TEST_LOG_FREQ: int = 1  # episodes (for testing)
 TEST_IMG_FREQ: int = 100  # steps (for testing)
 
@@ -82,7 +82,7 @@ OBS_DIM_SINGLE: int = 2 + NUM_FILES + (MAX_UAV_NEIGHBORS * (2 + NUM_FILES)) + (M
 
 ACTION_DIM: int = 2  # angle, distance from [-1, 1]
 STATE_DIM: int = NUM_UAVS * OBS_DIM_SINGLE
-MLP_HIDDEN_DIM: int = 256
+MLP_HIDDEN_DIM: int = 512  # increased from 256 for more GPU compute
 
 ACTOR_LR: float = 3e-4
 CRITIC_LR: float = 3e-4
@@ -95,7 +95,7 @@ EPSILON: float = 1e-9  # small value to prevent division by zero
 
 # Off-policy algorithm hyperparameters
 REPLAY_BUFFER_SIZE: int = 10**6  # B
-REPLAY_BATCH_SIZE: int = 64  # minibatch size
+REPLAY_BATCH_SIZE: int = 256  # minibatch size (increased from 64 for better GPU utilization)
 INITIAL_RANDOM_STEPS: int = 5000  # steps of random actions for exploration
 LEARN_FREQ: int = 5  # steps to learn after
 
@@ -110,10 +110,10 @@ TARGET_POLICY_NOISE: float = 0.2  # standard deviation of target policy smoothin
 NOISE_CLIP: float = 0.5  # range to clip target policy smoothing noise
 
 # MAPPO Specific Hyperparameters
-PPO_ROLLOUT_LENGTH: int = 2048  # number of steps to collect per rollout before updating
+PPO_ROLLOUT_LENGTH: int = 4096  # number of steps to collect per rollout before updating (increased for better GPU utilization)
 PPO_GAE_LAMBDA: float = 0.95  # lambda parameter for GAE
 PPO_EPOCHS: int = 10  # number of epochs to run on the collected rollout data
-PPO_BATCH_SIZE: int = 64  # size of mini-batches to use during the update step
+PPO_BATCH_SIZE: int = 512  # size of mini-batches to use during the update step (increased from 64 for better GPU utilization)
 PPO_CLIP_EPS: float = 0.2  # clipping parameter (epsilon) for the PPO surrogate objective
 PPO_VALUE_CLIP_EPS: float = 0.2  # clipping parameter for value function (can be same or different from policy clip)
 PPO_ENTROPY_COEF: float = 0.01  # coefficient for the entropy bonus to encourage exploration

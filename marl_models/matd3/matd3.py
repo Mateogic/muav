@@ -36,16 +36,19 @@ class MATD3(MARLModel):
 
     def select_actions(self, observations: list[np.ndarray], exploration: bool) -> np.ndarray:
         """Selects actions for all agents based on their observations (decentralized execution)."""
+        # Batch all observations for better GPU utilization
+        obs_array: np.ndarray = np.array(observations, dtype=np.float32)
+        obs_tensor: torch.Tensor = torch.from_numpy(obs_array).to(self.device, non_blocking=True)
+        
         actions: list[np.ndarray] = []
         with torch.no_grad():
-            for i, obs in enumerate(observations):
-                obs_tensor: torch.Tensor = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-                action: np.ndarray = self.actors[i](obs_tensor).squeeze(0).cpu().numpy()
-
+            for i in range(self.num_agents):
+                action: torch.Tensor = self.actors[i](obs_tensor[i:i+1]).squeeze(0)
                 if exploration:
-                    action += self.noise[i].sample()
-
-                actions.append(np.clip(action, -1.0, 1.0))
+                    action_np: np.ndarray = action.cpu().numpy() + self.noise[i].sample()
+                else:
+                    action_np = action.cpu().numpy()
+                actions.append(np.clip(action_np, -1.0, 1.0))
 
         return np.array(actions)
 
@@ -93,14 +96,14 @@ class MATD3(MARLModel):
             critic_1_loss: torch.Tensor = F.smooth_l1_loss(current_q1, y)
             critic_2_loss: torch.Tensor = F.smooth_l1_loss(current_q2, y)
 
-            self.critic_1_optimizers[agent_idx].zero_grad()
-            critic_1_loss.backward()
+            # Combined critic update for better GPU utilization
+            self.critic_1_optimizers[agent_idx].zero_grad(set_to_none=True)
+            self.critic_2_optimizers[agent_idx].zero_grad(set_to_none=True)
+            combined_critic_loss: torch.Tensor = critic_1_loss + critic_2_loss
+            combined_critic_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.critics_1[agent_idx].parameters(), config.MAX_GRAD_NORM)
-            self.critic_1_optimizers[agent_idx].step()
-
-            self.critic_2_optimizers[agent_idx].zero_grad()
-            critic_2_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.critics_2[agent_idx].parameters(), config.MAX_GRAD_NORM)
+            self.critic_1_optimizers[agent_idx].step()
             self.critic_2_optimizers[agent_idx].step()
 
         # Delayed Policy and Target Network Updates
@@ -119,7 +122,7 @@ class MATD3(MARLModel):
                 pred_actions_flat: torch.Tensor = torch.cat(updated_actions, dim=1)
 
                 actor_loss: torch.Tensor = -self.critics_1[agent_idx](obs_flat, pred_actions_flat).mean()
-                self.actor_optimizers[agent_idx].zero_grad()
+                self.actor_optimizers[agent_idx].zero_grad(set_to_none=True)
                 actor_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.actors[agent_idx].parameters(), config.MAX_GRAD_NORM)
                 self.actor_optimizers[agent_idx].step()
