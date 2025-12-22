@@ -4,6 +4,7 @@ from marl_models.utils import save_models
 from environment.env import Env
 from utils.logger import Logger, Log
 from utils.plot_snapshots import plot_snapshot
+from utils.plot_logs import generate_plots
 
 # from utils.plot_snapshots import update_trajectories, reset_trajectories  # trajectory tracking, comment if not needed
 import config
@@ -77,6 +78,8 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
         if update % config.LOG_FREQ == 0:
             elapsed_time: float = time.time() - start_time
             logger.log_metrics(update, rollout_log, config.LOG_FREQ, elapsed_time, "update")
+        if update % 100 == 0:
+            generate_plots(f"{logger.log_dir}/log_data_{logger.timestamp}.json", f"train_plots/{config.MODEL}/", "train", logger.timestamp)
         if update % save_freq == 0 and update < num_episodes:
             save_models(model, update, "update", logger.timestamp)
 
@@ -140,6 +143,8 @@ def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: i
         if episode % config.LOG_FREQ == 0:
             elapsed_time: float = time.time() - start_time
             logger.log_metrics(episode, episode_log, config.LOG_FREQ, elapsed_time, "episode")
+        if episode % 100 == 0:
+            generate_plots(f"{logger.log_dir}/log_data_{logger.timestamp}.json", f"train_plots/{config.MODEL}/", "train", logger.timestamp)
         if episode % save_freq == 0 and episode < num_episodes:
             save_models(model, episode, "episode", logger.timestamp, total_steps=total_step_count)
 
@@ -180,3 +185,5 @@ def train_random(env: Env, model: MARLModel, logger: Logger, num_episodes: int) 
         if episode % config.LOG_FREQ == 0:
             elapsed_time: float = time.time() - start_time
             logger.log_metrics(episode, episode_log, config.LOG_FREQ, elapsed_time, "episode")
+        if episode % 100 == 0:
+            generate_plots(f"{logger.log_dir}/log_data_{logger.timestamp}.json", f"train_plots/{config.MODEL}/", "train", logger.timestamp)

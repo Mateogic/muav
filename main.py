@@ -51,7 +51,7 @@ def start_training(args: argparse.Namespace):
 
     print("✅ Training Completed!\n")
     print("📊 Generating plots...")
-    generate_plots(f"train_logs/log_data_{timestamp}.json", "train_plots/", "train", timestamp)
+    generate_plots(f"train_logs/log_data_{timestamp}.json", f"train_plots/{model_name}/", "train", timestamp)
 
 
 def start_testing(args: argparse.Namespace):
@@ -72,7 +72,7 @@ def start_testing(args: argparse.Namespace):
 
     print("✅ Testing Completed!\n")
     print("📊 Generating plots...")
-    generate_plots(f"test_logs/log_data_{timestamp}.json", "test_plots/", "test", timestamp)
+    generate_plots(f"test_logs/log_data_{timestamp}.json", f"test_plots/{config.MODEL}/", "test", timestamp)
 
 
 if __name__ == "__main__":
