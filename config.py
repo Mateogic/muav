@@ -78,6 +78,13 @@ LOS_PARAMS: dict = {
 # Additional path loss for NLoS (dB) - accounts for shadowing and diffraction
 NLOS_ADDITIONAL_LOSS_DB: float = 10.0  # 非视距额外损耗
 
+# 3D Beamforming Parameters (3GPP TR 38.901 antenna model)
+ENABLE_BEAMFORMING: bool = True          # 启用3D波束赋形
+G_MAX_DBI: float = 18.0                  # 最大天线增益 (dBi)
+THETA_3DB: float = 30.0                  # 俯仰角3dB波束宽度 (度)
+PHI_3DB: float = 30.0                    # 方位角3dB波束宽度 (度)
+SLA_DB: float = 25.0                     # 旁瓣衰减上限 (dB)
+
 # Model Parameters
 
 ALPHA_1 = 8.0  # weightage for latency

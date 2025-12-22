@@ -36,6 +36,9 @@ class UAV:
         # Communication rates
         self._uav_uav_rate: float = 0.0
         self._uav_mbs_rate: float = 0.0
+        
+        # 3D Beamforming: 波束指向 (俯仰角, 方位角)
+        self._beam_direction: tuple[float, float] = (0.0, 0.0)
 
     @property
     def energy(self) -> float:
@@ -80,11 +83,15 @@ class UAV:
                     self._neighbors.append(other_uav)
 
     def set_current_requested_files(self) -> None:
-        """Update the current requested files based on the UEs covered by this UAV."""
+        """Update the current requested files and beam direction based on covered UEs."""
         for ue in self._current_covered_ues:
             if ue.current_request:
                 _, _, req_id = ue.current_request
                 self._current_requested_files[req_id] = True
+        
+        # 更新波束指向（指向关联UE的质心）
+        ue_positions = [ue.pos for ue in self._current_covered_ues]
+        self._beam_direction = comms.calculate_beam_direction(self.pos, ue_positions)
 
     def select_collaborator(self) -> None:
         """Choose a single collaborating UAV from its list of neighbours."""
@@ -145,7 +152,8 @@ class UAV:
         """Process content requests from UEs covered by this UAV."""
         self._working_cache = self.cache.copy()
         for ue in self._current_covered_ues:
-            ue_uav_rate = comms.calculate_ue_uav_rate(comms.calculate_channel_gain(ue.pos, self.pos), len(self._current_covered_ues))
+            channel_gain = comms.calculate_channel_gain(ue.pos, self.pos, self._beam_direction)
+            ue_uav_rate = comms.calculate_ue_uav_rate(channel_gain, len(self._current_covered_ues))
             self._process_content_request(ue, ue_uav_rate)
 
     def _set_rates(self) -> None:
