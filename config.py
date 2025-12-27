@@ -90,17 +90,25 @@ THETA_3DB: float = 30.0                  # 俯仰角3dB波束宽度 (度)
 PHI_3DB: float = 30.0                    # 方位角3dB波束宽度 (度)
 SLA_DB: float = 25.0                     # 旁瓣衰减上限 (dB)
 
+# Beam Control Parameters (智能体控制波束指向)
+BEAM_CONTROL_ENABLED: bool = True        # 是否启用智能体控制波束
+BEAM_CONTROL_MODE: str = "offset"        # "offset": 相对质心偏移, "absolute": 绝对角度
+BEAM_OFFSET_RANGE: float = 30.0          # offset模式下的最大偏移范围 (度)
+
 # Model Parameters
 
-ALPHA_1 = 8.0  # weightage for latency
-ALPHA_2 = 1.0  # weightage for energy
-ALPHA_3 = 4.0  # weightage for fairness
-REWARD_SCALING_FACTOR: float = 0.1  # scaling factor for rewards (increased from 0.01 to avoid gradient vanishing)
+# Reward weights (balanced based on std analysis for multi-objective learning)
+# Design: Each component should have similar std contribution for balanced gradients
+ALPHA_1: float = 14.0  # weightage for latency (penalty)
+ALPHA_2: float = 14.0  # weightage for energy (penalty)
+ALPHA_3: float = 3.0   # weightage for fairness/JFI (reward)
+ALPHA_RATE: float = 5.0  # weightage for system throughput (reward, beam control feedback)
+REWARD_SCALING_FACTOR: float = 0.05  # scaling factor for rewards (reduced due to larger weights)
 
 OBS_DIM_SINGLE: int = 2 + NUM_FILES + (MAX_UAV_NEIGHBORS * (2 + NUM_FILES)) + (MAX_ASSOCIATED_UES * (2 + 3))
 # own state: pos (2) + cache (NUM_FILES) + Neighbors: pos (2) + cache (NUM_FILES) + UEs: pos (2) + request_tuple (3)
 
-ACTION_DIM: int = 2  # angle, distance from [-1, 1]
+ACTION_DIM: int = 4 if BEAM_CONTROL_ENABLED else 2  # [dx, dy] 或 [dx, dy, beam_theta, beam_phi]
 STATE_DIM: int = NUM_UAVS * OBS_DIM_SINGLE
 MLP_HIDDEN_DIM: int = 512  # increased from 256 for more GPU compute
 
@@ -123,6 +131,7 @@ LEARN_FREQ: int = 5  # steps to learn after
 INITIAL_NOISE_SCALE: float = 0.1
 MIN_NOISE_SCALE: float = 0.01
 NOISE_DECAY_RATE: float = 0.995
+BEAM_NOISE_RATIO: float = 0.5  # 波束动作噪声相对于位移动作噪声的比例
 
 # MATD3 Specific Hyperparameters
 POLICY_UPDATE_FREQ: int = 2  # delayed policy update frequency (TD3 typically uses 2)

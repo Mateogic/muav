@@ -32,6 +32,10 @@ class Env:
         """Execute one time step of the simulation."""
         self._time_step += 1
 
+        # 0. Apply beam control actions first (affects current slot's communication)
+        if config.BEAM_CONTROL_ENABLED:
+            self._apply_beam_actions(actions)
+
         # 1. Process requests using current time slot state
         # 先初始化所有 UAV 的 working_cache，避免竞态条件
         # （协作 UAV 可能在请求处理时修改其他 UAV 的 _working_cache）
@@ -159,8 +163,11 @@ class Env:
         current_positions: np.ndarray = np.array([uav.pos[:2] for uav in self._uavs])
         max_dist: float = config.UAV_SPEED * config.TIME_SLOT_DURATION
 
+        # Extract movement actions (first 2 dimensions only)
+        movement_actions: np.ndarray = np.array(actions[:, :2], dtype=np.float32)
+
         # Interpret actions as a direct (x, y) vector
-        delta_vec_raw: np.ndarray = np.array(actions, dtype=np.float32)
+        delta_vec_raw: np.ndarray = movement_actions
 
         # Calculate the magnitude (distance) of this raw vector
         raw_magnitude: np.ndarray = np.linalg.norm(delta_vec_raw, axis=1, keepdims=True)
@@ -212,6 +219,33 @@ class Env:
         for i, uav in enumerate(self._uavs):
             uav.update_position(final_positions[i])
 
+    def _apply_beam_actions(self, actions: np.ndarray) -> None:
+        """Apply beam control actions from the agent.
+        
+        Actions format: [dx, dy, beam_theta, beam_phi] where beam_* are in [-1, 1]
+        
+        Two modes:
+        - offset: beam angles are offsets from centroid direction
+        - absolute: beam angles are absolute values
+        """
+        for i, uav in enumerate(self._uavs):
+            if actions.shape[1] < 4:
+                continue  # No beam control in action
+            
+            beam_action_theta = float(actions[i, 2])
+            beam_action_phi = float(actions[i, 3])
+            
+            if config.BEAM_CONTROL_MODE == "offset":
+                # Offset mode: [-1, 1] -> [-BEAM_OFFSET_RANGE, +BEAM_OFFSET_RANGE]
+                delta_theta = beam_action_theta * config.BEAM_OFFSET_RANGE
+                delta_phi = beam_action_phi * config.BEAM_OFFSET_RANGE
+                uav.set_beam_offset(delta_theta, delta_phi)
+            else:
+                # Absolute mode: [-1, 1] -> [0, 90] for theta, [-180, 180] for phi
+                theta = (beam_action_theta + 1.0) / 2.0 * 90.0  # [0, 90]
+                phi = beam_action_phi * 180.0                    # [-180, 180]
+                uav.set_beam_absolute(theta, phi)
+
     def _associate_ues_to_uavs(self) -> None:
         """Assigns each UE to at most one UAV, resolving overlaps by choosing the closest UAV."""
         for ue in self._ues:
@@ -239,7 +273,15 @@ class Env:
         r_fairness: float = config.ALPHA_3 * np.log(jfi + config.EPSILON)
         r_latency: float = config.ALPHA_1 * np.log(total_latency + config.EPSILON)
         r_energy: float = config.ALPHA_2 * np.log(total_energy + config.EPSILON)
-        reward: float = r_fairness - r_latency - r_energy
+        
+        # 系统传输速率奖励（波束控制的直接反馈）
+        total_rate: float = sum(uav.total_downlink_rate for uav in self._uavs)
+        # 归一化：使用参考速率避免数值过大
+        reference_rate: float = config.BANDWIDTH_EDGE * np.log2(1 + 100)  # 参考SNR=100时的速率
+        normalized_rate: float = total_rate / (config.NUM_UES * reference_rate + config.EPSILON)
+        r_rate: float = config.ALPHA_RATE * np.log(normalized_rate + config.EPSILON)
+        
+        reward: float = r_fairness + r_rate - r_latency - r_energy
         rewards: list[float] = [reward] * config.NUM_UAVS
         for uav in self._uavs:
             if uav.collision_violation:

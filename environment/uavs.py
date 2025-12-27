@@ -71,7 +71,11 @@ class UAV:
         self._backlog_rx_uav_mbs: float = 0.0
         
         # 3D Beamforming: 波束指向 (俯仰角, 方位角)
-        self._beam_direction: tuple[float, float] = (0.0, 0.0)
+        self._beam_direction: tuple[float, float] = (0.0, 0.0)  # 基准方向（指向UE质心）
+        self._beam_offset: tuple[float, float] = (0.0, 0.0)     # 智能体控制的偏移量
+        
+        # 传输速率记录（用于奖励计算）
+        self._total_downlink_rate: float = 0.0  # 本时隙总下行传输速率
 
     @property
     def energy(self) -> float:
@@ -84,6 +88,10 @@ class UAV:
     @property
     def neighbors(self) -> list[UAV]:
         return self._neighbors
+
+    @property
+    def total_downlink_rate(self) -> float:
+        return self._total_downlink_rate
 
     @property
     def current_collaborator(self) -> UAV | None:
@@ -114,6 +122,8 @@ class UAV:
         self._rx_time_uav_mbs = 0.0
         # 注意：_backlog_* 不重置，跨时隙保持
         self._num_requesting_uavs = 0  # 重置被选为协作者的计数
+        self._beam_offset = (0.0, 0.0)  # 重置波束偏移
+        self._total_downlink_rate = 0.0  # 重置传输速率记录
         self.collision_violation = False
         self.boundary_violation = False
 
@@ -139,9 +149,31 @@ class UAV:
                 _, _, req_id = ue.current_request
                 self._current_requested_files[req_id] = True
         
-        # 更新波束指向（指向关联UE的质心）
+        # 更新波束基准方向（指向关联UE的质心）
         ue_positions = [ue.pos for ue in self._current_covered_ues]
         self._beam_direction = comms.calculate_beam_direction(self.pos, ue_positions)
+
+    def set_beam_offset(self, delta_theta: float, delta_phi: float) -> None:
+        """Set beam offset from agent's action (offset mode)."""
+        self._beam_offset = (delta_theta, delta_phi)
+
+    def set_beam_absolute(self, theta: float, phi: float) -> None:
+        """Set beam direction directly from agent's action (absolute mode)."""
+        # 在absolute模式下，直接覆盖基准方向，偏移为0
+        self._beam_direction = (theta, phi)
+        self._beam_offset = (0.0, 0.0)
+
+    def get_final_beam_direction(self) -> tuple[float, float]:
+        """Get final beam direction combining base direction and offset."""
+        base_theta, base_phi = self._beam_direction
+        delta_theta, delta_phi = self._beam_offset
+        
+        # 计算最终角度
+        final_theta = np.clip(base_theta + delta_theta, 0.0, 90.0)
+        # 方位角周期性处理 [-180, 180]
+        final_phi = ((base_phi + delta_phi + 180.0) % 360.0) - 180.0
+        
+        return (final_theta, final_phi)
 
     def select_collaborator(self) -> None:
         """Choose a single collaborating UAV from its list of neighbours.
@@ -207,13 +239,16 @@ class UAV:
 
     def process_requests(self) -> None:
         """Process content requests from UEs covered by this UAV."""
+        final_beam = self.get_final_beam_direction()
         for ue in self._current_covered_ues:
-            channel_gain = comms.calculate_channel_gain(ue.pos, self.pos, self._beam_direction)
+            channel_gain = comms.calculate_channel_gain(ue.pos, self.pos, final_beam)
             num_ues = len(self._current_covered_ues)
             # 下行速率：UAV → UE，使用 UAV 发射功率
             downlink_rate = comms.calculate_ue_uav_rate(channel_gain, num_ues)
             # 上行速率：UE → UAV，使用 UE 发射功率
             uplink_rate = comms.calculate_ue_uav_uplink_rate(channel_gain, num_ues)
+            # 记录下行速率用于奖励计算
+            self._total_downlink_rate += downlink_rate
             self._process_content_request(ue, downlink_rate, uplink_rate)
 
     def _set_rates(self) -> None:
