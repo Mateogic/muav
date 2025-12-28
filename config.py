@@ -110,10 +110,10 @@ OBS_DIM_SINGLE: int = 2 + NUM_FILES + (MAX_UAV_NEIGHBORS * (2 + NUM_FILES)) + (M
 
 ACTION_DIM: int = 4 if BEAM_CONTROL_ENABLED else 2  # [dx, dy] 或 [dx, dy, beam_theta, beam_phi]
 STATE_DIM: int = NUM_UAVS * OBS_DIM_SINGLE
-MLP_HIDDEN_DIM: int = 512  # increased from 256 for more GPU compute
+MLP_HIDDEN_DIM: int = 768  # increased for high-dim critic input (7660 -> 768)
 
 ACTOR_LR: float = 3e-4
-CRITIC_LR: float = 3e-4
+CRITIC_LR: float = 6e-4
 DISCOUNT_FACTOR: float = 0.99  # gamma
 UPDATE_FACTOR: float = 0.01  # tau
 MAX_GRAD_NORM: float = 5.0  # maximum norm for gradient clipping to prevent exploding gradients
@@ -123,9 +123,9 @@ EPSILON: float = 1e-9  # small value to prevent division by zero
 
 # Off-policy algorithm hyperparameters
 REPLAY_BUFFER_SIZE: int = 10**6  # B
-REPLAY_BATCH_SIZE: int = 128  # minibatch size (increased from 64 for better GPU utilization)
+REPLAY_BATCH_SIZE: int = 256  # minibatch size (increased from 64 for better GPU utilization)
 INITIAL_RANDOM_STEPS: int = 5000  # steps of random actions for exploration
-LEARN_FREQ: int = 5  # steps to learn after
+LEARN_FREQ: int = 4  # steps to learn after
 
 # Gaussian Noise Parameters (for MADDPG and MATD3)
 INITIAL_NOISE_SCALE: float = 0.1
