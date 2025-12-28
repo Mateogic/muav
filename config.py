@@ -92,7 +92,7 @@ SLA_DB: float = 25.0                     # 旁瓣衰减上限 (dB)
 
 # Beam Control Parameters (智能体控制波束指向)
 BEAM_CONTROL_ENABLED: bool = True        # 是否启用智能体控制波束
-BEAM_CONTROL_MODE: str = "offset"        # "offset": 相对质心偏移, "absolute": 绝对角度
+BEAM_CONTROL_MODE: str = "absolute"       # "offset": 相对质心偏移, "absolute": 绝对角度
 BEAM_OFFSET_RANGE: float = 30.0          # offset模式下的最大偏移范围 (度)
 
 # Model Parameters

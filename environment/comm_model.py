@@ -158,18 +158,36 @@ def calculate_channel_gain(pos1: np.ndarray, pos2: np.ndarray,
     return config.G_CONSTS_PRODUCT * beam_gain / (avg_path_loss + config.EPSILON)
 
 
-def calculate_ue_uav_rate(channel_gain: float, num_associated_ues: int) -> float:
-    """Calculates downlink data rate from UAV to UE.
+def calculate_ue_uav_rate(channel_gain: float, num_associated_ues: int, interference_power: float = 0.0) -> float:
+    """Calculates downlink data rate from UAV to UE with co-channel interference.
     
     下行链路：UAV → UE，使用 OFDMA 多址方式。
     总功率限制模型：UAV 的总发射功率固定，OFDMA 时每个 UE 分得 1/N 的带宽和功率。
+    
+    考虑同频干扰：其他UAV在相同频段发射的信号会对该UE造成干扰。
+    
+    OFDMA子载波级别SINR计算：
+    - 信号功率：P_tx/N × G_signal（服务UAV分配给该UE的功率）
+    - 噪声功率：σ²/N（子载波带宽上的热噪声）
+    - 干扰功率：I_total/N（干扰功率也分散在整个频带，只有1/N落入该子载波）
+    
+    SINR = (P/N × G) / (σ²/N + I/N) = (P × G) / (σ² + I)
+    
+    Args:
+        channel_gain: 服务UAV到UE的信道增益
+        num_associated_ues: 服务UAV关联的UE数量（用于OFDMA功率/带宽分配）
+        interference_power: 来自其他UAV的同频干扰功率总和（全频带）
+    
+    Returns:
+        下行数据速率 (bits/s)
     """
     assert num_associated_ues != 0
-    # OFDMA: 带宽和功率都平分给各 UE
+    # OFDMA: 带宽平分给各 UE
     bandwidth_per_ue: float = config.BANDWIDTH_EDGE / num_associated_ues
-    power_per_ue: float = config.TRANSMIT_POWER / num_associated_ues
-    snr: float = (power_per_ue * channel_gain) / config.AWGN
-    return bandwidth_per_ue * np.log2(1 + snr)
+    # SINR计算：由于噪声和干扰也按1/N缩放，最终等价于使用全功率除以全频带噪声+干扰
+    # 这是OFDMA系统的标准特性：子载波SINR = 全频带SNR
+    sinr: float = (config.TRANSMIT_POWER * channel_gain) / (config.AWGN + interference_power)
+    return bandwidth_per_ue * np.log2(1 + sinr)
 
 
 def calculate_ue_uav_uplink_rate(channel_gain: float, num_associated_ues: int) -> float:
@@ -199,6 +217,38 @@ def calculate_uav_mbs_downlink_rate(channel_gain: float) -> float:
     """
     snr: float = (config.MBS_TRANSMIT_POWER * channel_gain) / config.AWGN
     return config.BANDWIDTH_BACKHAUL * np.log2(1 + snr)
+
+
+def calculate_interference_power(interfering_uav_pos: np.ndarray, ue_pos: np.ndarray,
+                                  interferer_beam_direction: tuple[float, float],
+                                  interferer_num_ues: int) -> float:
+    """计算单个干扰UAV对UE造成的干扰功率。
+    
+    干扰功率 = (干扰UAV的发射功率/其关联UE数) × 信道增益
+    
+    Args:
+        interfering_uav_pos: 干扰UAV的位置
+        ue_pos: 受干扰UE的位置
+        interferer_beam_direction: 干扰UAV的波束方向
+        interferer_num_ues: 干扰UAV关联的UE数量（用于确定其发射功率分配）
+    
+    Returns:
+        干扰功率（线性值）
+    """
+    if interferer_num_ues == 0:
+        return 0.0  # 干扰UAV没有关联UE时不发射
+    
+    # 计算干扰链路的信道增益（考虑波束方向）
+    interference_channel_gain = calculate_channel_gain(
+        ue_pos, interfering_uav_pos, interferer_beam_direction
+    )
+    
+    # 干扰UAV的功率按OFDMA分配给其关联的UE
+    # 对于受干扰UE，它接收到的是干扰UAV的全部发射功率（因为不在OFDMA子载波分配中）
+    # 保守估计：使用干扰UAV的总发射功率
+    interference_power = config.TRANSMIT_POWER * interference_channel_gain
+    
+    return interference_power
 
 
 def calculate_uav_uav_rate(channel_gain: float, num_collaborating_uavs: int = 1) -> float:

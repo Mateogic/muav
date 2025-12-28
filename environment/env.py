@@ -36,7 +36,11 @@ class Env:
         if config.BEAM_CONTROL_ENABLED:
             self._apply_beam_actions(actions)
 
-        # 1. Process requests using current time slot state
+        # 1. Calculate co-channel interference AFTER beam actions are applied
+        # 确保干扰计算使用的波束方向与信号计算一致
+        self._calculate_ue_interference()
+
+        # 2. Process requests using current time slot state
         # 先初始化所有 UAV 的 working_cache，避免竞态条件
         # （协作 UAV 可能在请求处理时修改其他 UAV 的 _working_cache）
         for uav in self._uavs:
@@ -260,6 +264,42 @@ class Env:
             best_uav, _ = min(covering_uavs, key=lambda x: x[1])
             best_uav.current_covered_ues.append(ue)
             ue.assigned = True
+
+    def _calculate_ue_interference(self) -> None:
+        """Calculate co-channel interference for each UE from non-serving UAVs.
+        
+        对于每个被服务的UE，计算来自所有其他UAV的同频干扰功率总和。
+        干扰功率取决于：
+        1. 干扰UAV到UE的距离和信道增益
+        2. 干扰UAV的波束方向（3D beamforming）
+        3. 干扰UAV是否有关联UE（无关联则不发射）
+        """
+        from environment import comm_model as comms
+        
+        # 预计算每个UAV的波束方向和关联UE数量
+        uav_info: list[tuple[np.ndarray, tuple[float, float], int]] = []
+        for uav in self._uavs:
+            beam_dir = uav.get_final_beam_direction()
+            num_ues = len(uav.current_covered_ues)
+            uav_info.append((uav.pos, beam_dir, num_ues))
+        
+        # 为每个被服务的UE计算干扰
+        for serving_uav_idx, uav in enumerate(self._uavs):
+            for ue in uav.current_covered_ues:
+                total_interference: float = 0.0
+                
+                # 累加来自所有其他UAV的干扰
+                for interferer_idx, (interferer_pos, interferer_beam, interferer_num_ues) in enumerate(uav_info):
+                    if interferer_idx == serving_uav_idx:
+                        continue  # 跳过服务UAV本身
+                    
+                    # 计算该干扰UAV对此UE的干扰功率
+                    interference = comms.calculate_interference_power(
+                        interferer_pos, ue.pos, interferer_beam, interferer_num_ues
+                    )
+                    total_interference += interference
+                
+                ue.interference_power = total_interference
 
     def _get_rewards_and_metrics(self) -> tuple[list[float], tuple[float, float, float]]:
         """Returns the reward and other metrics."""

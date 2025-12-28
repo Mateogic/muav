@@ -38,6 +38,9 @@ class UE:
         # Fairness Tracking：公平性跟踪
         self._successful_requests: int = 0# 成功处理的请求数量
         self.service_coverage: float = 0.0# 服务覆盖率（成功请求数 / 总请求数）
+        
+        # Co-channel Interference：同频干扰
+        self.interference_power: float = 0.0  # 来自其他UAV的同频干扰功率总和
 
     def update_position(self) -> None:
         """Updates the UE's position for one time slot as per the Random Waypoint model."""

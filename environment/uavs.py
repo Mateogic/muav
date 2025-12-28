@@ -150,8 +150,10 @@ class UAV:
                 self._current_requested_files[req_id] = True
         
         # 更新波束基准方向（指向关联UE的质心）
-        ue_positions = [ue.pos for ue in self._current_covered_ues]
-        self._beam_direction = comms.calculate_beam_direction(self.pos, ue_positions)
+        # 优化：仅在 offset 模式下才需要计算基准方向
+        if config.BEAM_CONTROL_MODE == "offset":
+            ue_positions = [ue.pos for ue in self._current_covered_ues]
+            self._beam_direction = comms.calculate_beam_direction(self.pos, ue_positions)
 
     def set_beam_offset(self, delta_theta: float, delta_phi: float) -> None:
         """Set beam offset from agent's action (offset mode)."""
@@ -243,9 +245,9 @@ class UAV:
         for ue in self._current_covered_ues:
             channel_gain = comms.calculate_channel_gain(ue.pos, self.pos, final_beam)
             num_ues = len(self._current_covered_ues)
-            # 下行速率：UAV → UE，使用 UAV 发射功率
-            downlink_rate = comms.calculate_ue_uav_rate(channel_gain, num_ues)
-            # 上行速率：UE → UAV，使用 UE 发射功率
+            # 下行速率：UAV → UE，考虑同频干扰（SINR）
+            downlink_rate = comms.calculate_ue_uav_rate(channel_gain, num_ues, ue.interference_power)
+            # 上行速率：UE → UAV，使用 UE 发射功率（上行干扰暂不考虑）
             uplink_rate = comms.calculate_ue_uav_uplink_rate(channel_gain, num_ues)
             # 记录下行速率用于奖励计算
             self._total_downlink_rate += downlink_rate
