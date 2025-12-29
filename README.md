@@ -1,10 +1,10 @@
-# Multi-UAV Assisted Mobile Edge Computing: A Hybrid Optimization Approach
+# Multi-UAV Aerial Base Station for Communication Coverage: A MARL-based Optimization Approach
 
 ## Objective
 
-The primary objective of this research is to develop a framework for a multi-UAV-assisted collaborative Mobile Edge Computing (MEC) network. We aim to jointly optimize four interdependent components: task offloading decisions, service caching placement, content caching strategies, and UAV trajectories. The goal is to minimize a weighted sum of service latency and system-wide energy consumption while simultaneously maximizing user fairness.
+The primary objective of this research is to develop a framework for a **multi-UAV aerial base station network** that provides communication coverage for ground users. We aim to jointly optimize three interdependent components: **content caching strategies**, **3D beamforming control**, and **UAV trajectory planning**. The goal is to minimize a weighted sum of service latency and system-wide energy consumption while simultaneously maximizing user fairness.
 
-We are aiming to implement a hybrid optimization approach that combines **multi-agent deep reinforcement learning** with **collaborative and adaptive caching policies**. We are trying to create a generic framework that can be used with different models for finding the best-suited one for our purpose. Also trying to incorporate modern Python practices and type annotations. Developed using Python 3.12.0 and PyTorch 2.8.0.
+We implement a hybrid optimization approach that combines **multi-agent deep reinforcement learning (MARL)** with **collaborative and adaptive caching policies**. The framework is designed to be modular and extensible, supporting different MARL algorithms for comparative evaluation. Developed using Python 3.12.0 and PyTorch 2.8.0 with modern Python practices and type annotations.
 
 Currently included MARL models:
 - MADDPG (Multi-Agent Deep Deterministic Policy Gradient)

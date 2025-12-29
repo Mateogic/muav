@@ -170,12 +170,17 @@ class UAV:
         self._beam_offset = (0.0, 0.0)
 
     def get_final_beam_direction(self) -> tuple[float, float]:
-        """Get final beam direction combining base direction and offset."""
+        """Get final beam direction combining base direction and offset.
+        
+        球坐标系：
+        - theta: [0°, 180°]，0°=天顶，90°=水平，180°=天底
+        - phi: [-180°, 180°]，方位角
+        """
         base_theta, base_phi = self._beam_direction
         delta_theta, delta_phi = self._beam_offset
         
-        # 计算最终角度
-        final_theta = np.clip(base_theta + delta_theta, 0.0, 90.0)
+        # 计算最终角度（theta 范围扩展到 [0, 180]）
+        final_theta = np.clip(base_theta + delta_theta, 0.0, 180.0)
         # 方位角周期性处理 [-180, 180]
         final_phi = ((base_phi + delta_phi + 180.0) % 360.0) - 180.0
         
@@ -393,7 +398,7 @@ class UAV:
                 _try_add_file_to_cache(self._current_collaborator, req_id)
             _try_add_file_to_cache(self, req_id)
         else:
-            # Offload to MBS directly: 直接从MBS获取
+            # Fetch from MBS via backhaul: 通过回程链路从MBS获取
             # === UAV ↔ MBS 链路 ===
             # 上行请求：UAV → MBS，使用 UAV 发射功率
             uav_mbs_request_latency = request_size_bits / self._uav_mbs_uplink_rate

@@ -13,23 +13,30 @@ TEST_LOG_FREQ: int = 1  # episodes (for testing)
 TEST_IMG_FREQ: int = 100  # steps (for testing)
 
 # Simulation Parameters
-MBS_POS: np.ndarray = np.array([500.0, 500.0, 30.0])  # (X_mbs, Y_mbs, Z_mbs) in meters
-NUM_UAVS: int = 10  # U
-NUM_UES: int = 100  # M
+MBS_POS: np.ndarray = np.array([500.0, 500.0, 300.0])  # (X_mbs, Y_mbs, Z_mbs) in meters
+NUM_UAVS: int = 6  # U
+NUM_UES: int = 60  # M
 AREA_WIDTH: int = 1000  # X_max in meters
 AREA_HEIGHT: int = 1000  # Y_max in meters
 TIME_SLOT_DURATION: float = 1.0  # tau in seconds
-UE_MAX_DIST: int = 20  # d_max^UE in meters
+UE_MAX_DIST: int = 20  # d_max^UE in meters (per time slot)
 UE_MAX_WAIT_TIME: int = 10  # in time slots
 
+# UE Height Parameters (3D mobility)
+UE_MIN_ALT: float = 0.0     # 地面UE高度
+UE_MAX_ALT: float = 600.0   # 空中UE最大高度
+UE_GROUND_RATIO: float = 0.5  # 地面UE占比（50%地面，50%空中）
+UE_AERIAL_MIN_ALT: float = 50.0   # 空中UE最小高度
+UE_AERIAL_MAX_ALT: float = 600.0  # 空中UE最大高度
+
 # UAV Parameters
-UAV_MIN_ALT: float = 50.0   # H_min in meters (minimum flight altitude)
-UAV_MAX_ALT: float = 300.0  # H_max in meters (maximum flight altitude)
+UAV_MIN_ALT: float = 100.0  # H_min in meters (minimum flight altitude)
+UAV_MAX_ALT: float = 500.0  # H_max in meters (maximum flight altitude)
 UAV_SPEED: int = 30  # v^UAV in m/s (3D speed limit)
 UAV_STORAGE_CAPACITY: np.ndarray = _config_rng.choice(np.arange(5 * 10**6, 20 * 10**6, 10**6), size=NUM_UAVS)  # S_u in bytes
-UAV_SENSING_RANGE: float = 300.0  # R^sense in meters
-UAV_COVERAGE_RADIUS: float = 100.0  # R in meters
-MIN_UAV_SEPARATION: float = 200.0  # d_min in meters
+UAV_SENSING_RANGE: float = 500.0  # R^sense in meters
+UAV_COVERAGE_RADIUS: float = 200.0  # R in meters (3D spherical coverage)
+MIN_UAV_SEPARATION: float = 400.0  # d_min in meters
 assert UAV_COVERAGE_RADIUS * 2 <= MIN_UAV_SEPARATION
 assert UAV_SENSING_RANGE >= MIN_UAV_SEPARATION
 
@@ -89,7 +96,7 @@ ENABLE_BEAMFORMING: bool = True          # 启用3D波束赋形
 G_MAX_DBI: float = 18.0                  # 最大天线增益 (dBi)
 THETA_3DB: float = 30.0                  # 俯仰角3dB波束宽度 (度)
 PHI_3DB: float = 30.0                    # 方位角3dB波束宽度 (度)
-SLA_DB: float = 25.0                     # 旁瓣衰减上限 (dB)
+SLA_DB: float = 20.0                     # 旁瓣衰减上限 (dB)
 
 # Beam Control Parameters (智能体控制波束指向)
 BEAM_CONTROL_ENABLED: bool = True        # 是否启用智能体控制波束

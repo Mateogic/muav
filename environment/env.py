@@ -130,7 +130,8 @@ class Env:
         all_obs: list[np.ndarray] = []
         
         # Normalization constants for 3D positions
-        pos_norm = np.array([config.AREA_WIDTH, config.AREA_HEIGHT, config.UAV_MAX_ALT])
+        # 使用 UE 最大高度作为 z 归一化常量（因为 UE 可以比 UAV 更高）
+        pos_norm = np.array([config.AREA_WIDTH, config.AREA_HEIGHT, config.UE_MAX_ALT])
         
         for uav in self._uavs:
             # Part 1: Own state (position and cache status)
@@ -151,8 +152,8 @@ class Env:
             ue_states: np.ndarray = np.zeros((config.MAX_ASSOCIATED_UES, 3 + 3))
             ues: list[UE] = sorted(uav.current_covered_ues, key=lambda u: float(np.linalg.norm(uav.pos - u.pos)))[: config.MAX_ASSOCIATED_UES]
             for i, ue in enumerate(ues):
-                # Relative 3D position (UE is at ground level, so z difference is significant)
-                delta_pos: np.ndarray = (ue.pos - uav.pos) / pos_norm
+                # Relative 3D position normalized by coverage radius (球形覆盖范围内)
+                delta_pos: np.ndarray = (ue.pos - uav.pos) / config.UAV_COVERAGE_RADIUS
                 req_type, _, req_id = ue.current_request
                 norm_id: float = float(req_id) / float(config.NUM_FILES)
                 file_size: float = float(config.FILE_SIZES[req_id])
@@ -266,19 +267,20 @@ class Env:
                 delta_phi = beam_action_phi * config.BEAM_OFFSET_RANGE
                 uav.set_beam_offset(delta_theta, delta_phi)
             else:
-                # Absolute mode: [-1, 1] -> [0, 90] for theta, [-180, 180] for phi
-                theta = (beam_action_theta + 1.0) / 2.0 * 90.0  # [0, 90]
-                phi = beam_action_phi * 180.0                    # [-180, 180]
+                # Absolute mode: [-1, 1] -> [0, 180] for theta (full sphere), [-180, 180] for phi
+                theta = (beam_action_theta + 1.0) / 2.0 * 180.0  # [0, 180]
+                phi = beam_action_phi * 180.0                     # [-180, 180]
                 uav.set_beam_absolute(theta, phi)
 
     def _associate_ues_to_uavs(self) -> None:
-        """Assigns each UE to at most one UAV, resolving overlaps by choosing the closest UAV."""
+        """Assigns each UE to at most one UAV using 3D spherical coverage."""
         for ue in self._ues:
             covering_uavs: list[tuple[UAV, float]] = []
             for uav in self._uavs:
-                distance: float = float(np.linalg.norm(uav.pos[:2] - ue.pos[:2]))
-                if distance <= config.UAV_COVERAGE_RADIUS:
-                    covering_uavs.append((uav, distance))
+                # 使用 3D 距离判断球形覆盖范围
+                distance_3d: float = float(np.linalg.norm(uav.pos - ue.pos))
+                if distance_3d <= config.UAV_COVERAGE_RADIUS:
+                    covering_uavs.append((uav, distance_3d))
 
             if not covering_uavs:
                 continue

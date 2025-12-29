@@ -21,8 +21,23 @@ class UE:
     def __init__(self, ue_id: int) -> None:
         # self.id: 设置为传入的 ue_id。
         self.id: int = ue_id
-        # self.pos: 初始化为一个 NumPy 数组，表示 UE 的位置。x 和 y 坐标在区域宽度和高度范围内随机生成，z 坐标固定为 0（地面）。
-        self.pos: np.ndarray = np.array([np.random.uniform(0, config.AREA_WIDTH), np.random.uniform(0, config.AREA_HEIGHT), 0.0])
+        
+        # 分层移动：根据 UE_GROUND_RATIO 确定 UE 是地面还是空中
+        self._is_aerial: bool = ue_id >= int(config.NUM_UES * config.UE_GROUND_RATIO)
+        
+        # self.pos: 初始化为一个 NumPy 数组，表示 UE 的 3D 位置
+        if self._is_aerial:
+            # 空中 UE：在指定高度范围内随机初始化
+            initial_z = np.random.uniform(config.UE_AERIAL_MIN_ALT, config.UE_AERIAL_MAX_ALT)
+        else:
+            # 地面 UE：z 固定为 0
+            initial_z = 0.0
+        self.pos: np.ndarray = np.array([
+            np.random.uniform(0, config.AREA_WIDTH), 
+            np.random.uniform(0, config.AREA_HEIGHT), 
+            initial_z
+        ])
+        
         # self.current_request: 一个元组，表示当前通信需求，格式为 (req_type, req_size, req_id)。req_type固定为1（内容请求）。
         self.current_request: tuple[int, int, int] = (1, 0, 0)  # Request : (req_type=1, req_size, req_id)
         # self.latency_current_request: 浮点数，表示当前请求的延迟，初始值为 0.0。
@@ -30,33 +45,34 @@ class UE:
         # self.assigned: 布尔值，指示 UE 是否已分配给 UAV，初始值为 False。
         self.assigned: bool = False
 
-        # Random Waypoint Model：随机游走模型变量
-        self._waypoint: np.ndarray# 目标位置坐标 [x, y]
-        self._wait_time: int# 在到达目标位置后等待的时间步数
+        # Random Waypoint Model：随机游走模型变量（3D）
+        self._waypoint: np.ndarray  # 目标位置坐标 [x, y, z]
+        self._wait_time: int  # 在到达目标位置后等待的时间步数
         self._set_new_waypoint()  # Initialize first waypoint
 
         # Fairness Tracking：公平性跟踪
-        self._successful_requests: int = 0# 成功处理的请求数量
-        self.service_coverage: float = 0.0# 服务覆盖率（成功请求数 / 总请求数）
+        self._successful_requests: int = 0  # 成功处理的请求数量
+        self.service_coverage: float = 0.0  # 服务覆盖率（成功请求数 / 总请求数）
         
         # Co-channel Interference：同频干扰
         self.interference_power: float = 0.0  # 来自其他UAV的同频干扰功率总和
 
     def update_position(self) -> None:
-        """Updates the UE's position for one time slot as per the Random Waypoint model."""
+        """Updates the UE's position for one time slot as per the 3D Random Waypoint model."""
         if self._wait_time > 0:
             self._wait_time -= 1
             return
 
-        direction_vec: np.ndarray = self._waypoint - self.pos[:2]
+        # 计算当前位置到目标的 3D 向量
+        direction_vec: np.ndarray = self._waypoint - self.pos
         distance_to_waypoint: float = float(np.linalg.norm(direction_vec))
 
         if config.UE_MAX_DIST >= distance_to_waypoint:  # Reached the waypoint
-            self.pos[:2] = self._waypoint
+            self.pos = self._waypoint.copy()
             self._set_new_waypoint()
         else:  # Move towards the waypoint
             move_vector = (direction_vec / distance_to_waypoint) * config.UE_MAX_DIST
-            self.pos[:2] += move_vector
+            self.pos += move_vector
 
     def generate_request(self) -> None:
         """Generates a new content request (communication demand) for the current time slot."""
@@ -80,9 +96,18 @@ class UE:
 
         assert current_time_step_t > 0
         self.service_coverage = self._successful_requests / current_time_step_t
-    # 实现随机游走模型，为 UE 设置新的目标位置、速度和等待时间。
-    # 是否需要设置约束不要距离原本位置太远？
+    # 实现 3D 随机游走模型，为 UE 设置新的目标位置和等待时间。
     def _set_new_waypoint(self):
-        """Set a new destination, speed, and wait time as per the Random Waypoint model."""
-        self._waypoint = np.array([np.random.uniform(0, config.AREA_WIDTH), np.random.uniform(0, config.AREA_HEIGHT)])
+        """Set a new 3D destination and wait time as per the Random Waypoint model."""
+        new_x = np.random.uniform(0, config.AREA_WIDTH)
+        new_y = np.random.uniform(0, config.AREA_HEIGHT)
+        
+        if self._is_aerial:
+            # 空中 UE：在指定高度范围内随机选择目标高度
+            new_z = np.random.uniform(config.UE_AERIAL_MIN_ALT, config.UE_AERIAL_MAX_ALT)
+        else:
+            # 地面 UE：z 固定为 0
+            new_z = 0.0
+        
+        self._waypoint = np.array([new_x, new_y, new_z])
         self._wait_time = np.random.randint(0, config.UE_MAX_WAIT_TIME + 1)

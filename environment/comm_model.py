@@ -2,62 +2,71 @@ import config
 import numpy as np
 
 """
-空对地信道模型 (Air-to-Ground Channel Model)
-================================================
-实现基于 ITU-R / 3GPP TR 36.777 的视距(LoS)/非视距(NLoS)概率信道模型，
-支持 3D 波束赋形天线增益计算。
+3D 球形覆盖信道模型 (3D Spherical Coverage Channel Model)
+==========================================================
+实现支持任意 3D 相对位置的信道模型，包括：
+- UAV 在上方服务地面/低空 UE
+- UAV 在下方服务高空 UE  
+- UAV 与 UE 同高度的水平链路
 
 模型特点：
-1. LoS概率模型：基于仰角计算视距链路概率
-   P_LoS = 1 / (1 + a * exp(-b * (θ - a)))
-
-2. 平均路径损耗：结合LoS和NLoS的加权平均
-   PL_avg = P_LoS * PL_LoS + (1 - P_LoS) * PL_NLoS
-
-3. 3D波束赋形增益 (3GPP TR 38.901):
-   G(θ,φ) = G_max - min(12*((θ-θ0)/θ_3dB)^2 + 12*((φ-φ0)/φ_3dB)^2, SLA)
+1. LoS概率模型：基于仰角计算视距链路概率（适应高空 UE）
+2. 3D 波束赋形：使用球坐标系，俯仰角范围 [0°, 180°]
+   - 0° = 正上方（天顶）
+   - 90° = 水平
+   - 180° = 正下方（天底）
+3. 球形覆盖区域：以 UAV 为中心的 3D 球形关联范围
 
 位置坐标格式：[x, y, z] (meters)
-- UE: [x, y, 0.0] - 地面用户
-- UAV: [x, y, UAV_ALTITUDE] - 空中基站
-- MBS: [500.0, 500.0, 30.0] - 宏基站
 """
 
 
-def _calculate_elevation_angle(pos_ground: np.ndarray, pos_aerial: np.ndarray) -> float:
+def _calculate_elevation_angle(pos1: np.ndarray, pos2: np.ndarray) -> float:
     """
-    计算从地面点到空中点的仰角（elevation angle）。
+    计算两点之间连线相对于水平面的仰角。
     
     Args:
-        pos_ground: 地面位置 [x, y, z_ground]
-        pos_aerial: 空中位置 [x, y, z_aerial]
+        pos1, pos2: 两个 3D 位置 [x, y, z]
     
     Returns:
-        仰角（度），范围 [0, 90]
+        仰角（度），范围 [0, 90]，始终为正值
     """
-    horizontal_dist = np.sqrt((pos_aerial[0] - pos_ground[0])**2 + (pos_aerial[1] - pos_ground[1])**2)
-    vertical_dist = abs(pos_aerial[2] - pos_ground[2])
+    horizontal_dist = np.sqrt((pos2[0] - pos1[0])**2 + (pos2[1] - pos1[1])**2)
+    vertical_dist = abs(pos2[2] - pos1[2])
     
     if horizontal_dist < config.EPSILON:
-        return 90.0  # 正上方
+        return 90.0  # 垂直方向
     
     # 仰角 = arctan(垂直距离 / 水平距离)
     elevation_rad = np.arctan(vertical_dist / horizontal_dist)
     return np.degrees(elevation_rad)
 
 
-def _calculate_los_probability(elevation_angle: float) -> float:
+def _calculate_los_probability(pos1: np.ndarray, pos2: np.ndarray) -> float:
     """
-    计算视距(LoS)链路概率。
-    基于 ITU-R / 3GPP 模型: P_LoS = 1 / (1 + a * exp(-b * (θ - a)))
+    计算两点之间的视距(LoS)链路概率。
+    
+    对于空对空链路（双方都在高空），LoS概率接近1.0。
+    对于有一方接近地面的链路，使用 ITU-R / 3GPP 模型。
+    
     Args:
-        elevation_angle: 仰角（度）
+        pos1, pos2: 两个 3D 位置 [x, y, z]
     
     Returns:
         LoS概率，范围 [0, 1]
     """
+    min_height = min(pos1[2], pos2[2])
+    elevation_angle = _calculate_elevation_angle(pos1, pos2)
+    
+    # 空对空链路：双方都在空中UE最低高度以上时，遮挡概率很低
+    if min_height >= config.UE_AERIAL_MIN_ALT:
+        # 两端都在空中（≥50m），视为空对空链路
+        # 仰角越大（更垂直），LoS 概率越高
+        p_los = 0.9 + 0.1 * (elevation_angle / 90.0)
+        return np.clip(p_los, 0.0, 1.0)
+    
+    # 有一端接近地面：使用原 LoS 模型
     a, b = config.LOS_PARAMS.get(config.ENVIRONMENT_TYPE, config.LOS_PARAMS['urban'])
-
     p_los = 1.0 / (1.0 + a * np.exp(-b * (elevation_angle - a)))
     return np.clip(p_los, 0.0, 1.0)
 
@@ -73,7 +82,14 @@ def _wrap_angle(angle: float) -> float:
 
 def calculate_beam_direction(uav_pos: np.ndarray, ue_positions: list[np.ndarray]) -> tuple[float, float]:
     """
-    计算波束指向角（指向关联UE的质心）。
+    计算波束指向角（指向关联UE的质心），使用球坐标系。
+    
+    球坐标系定义：
+    - theta (俯仰角): 从 Z+ 轴（天顶）测量，[0°, 180°]
+      - 0° = 正上方
+      - 90° = 水平
+      - 180° = 正下方
+    - phi (方位角): 在 XY 平面上，[-180°, 180°]
     
     Args:
         uav_pos: UAV位置 [x, y, z]
@@ -83,14 +99,22 @@ def calculate_beam_direction(uav_pos: np.ndarray, ue_positions: list[np.ndarray]
         (theta_0, phi_0): 波束指向的俯仰角和方位角（度）
     """
     if not ue_positions:
-        return (0.0, 0.0)  # 默认垂直下倾
+        return (90.0, 0.0)  # 默认水平方向
     
     centroid = np.mean(ue_positions, axis=0)
-    dx, dy = centroid[0] - uav_pos[0], centroid[1] - uav_pos[1]
-    dz = uav_pos[2] - centroid[2]
+    dx = centroid[0] - uav_pos[0]
+    dy = centroid[1] - uav_pos[1]
+    dz = centroid[2] - uav_pos[2]  # 注意：这里是目标减UAV，可正可负
     
     horizontal_dist = np.sqrt(dx**2 + dy**2)
-    theta_0 = np.degrees(np.arctan2(horizontal_dist, dz)) if dz > config.EPSILON else 90.0
+    distance_3d = np.sqrt(dx**2 + dy**2 + dz**2)
+    
+    if distance_3d < config.EPSILON:
+        return (90.0, 0.0)  # 重合时默认水平
+    
+    # 球坐标系：theta 从 Z+ 轴测量
+    # arccos(dz / r) 给出从天顶的角度
+    theta_0 = np.degrees(np.arccos(np.clip(dz / distance_3d, -1.0, 1.0)))
     phi_0 = np.degrees(np.arctan2(dy, dx))
     
     return (theta_0, phi_0)
@@ -99,60 +123,84 @@ def calculate_beam_direction(uav_pos: np.ndarray, ue_positions: list[np.ndarray]
 def _calculate_beam_gain(uav_pos: np.ndarray, target_pos: np.ndarray, 
                          beam_direction: tuple[float, float]) -> float:
     """
-    计算3D波束赋形天线增益（3GPP TR 38.901模型）。
-    G(θ,φ) = G_max - min(12*(Δθ/θ_3dB)² + 12*(Δφ/φ_3dB)², SLA)
+    计算3D波束赋形天线增益（3GPP TR 38.901模型），支持全向覆盖。
+    
+    使用球坐标系，theta 范围 [0°, 180°]：
+    - 0° = 正上方（天顶）
+    - 90° = 水平
+    - 180° = 正下方（天底）
+    
+    通过计算波束方向与目标方向之间的真实角度偏差（大圆距离）来确定增益衰减，
+    避免在极点附近因方位角差异导致的计算错误。
     """
     if not config.ENABLE_BEAMFORMING:
         return 1.0
     
     theta_0, phi_0 = beam_direction
-    dx, dy = target_pos[0] - uav_pos[0], target_pos[1] - uav_pos[1]
-    dz = uav_pos[2] - target_pos[2]
+    dx = target_pos[0] - uav_pos[0]
+    dy = target_pos[1] - uav_pos[1]
+    dz = target_pos[2] - uav_pos[2]
     
-    horizontal_dist = np.sqrt(dx**2 + dy**2)
-    theta_target = np.degrees(np.arctan2(horizontal_dist, dz)) if dz > config.EPSILON else 90.0
-    phi_target = np.degrees(np.arctan2(dy, dx))
+    distance_3d = np.sqrt(dx**2 + dy**2 + dz**2)
     
-    # 角度偏差
-    theta_diff = theta_target - theta_0
-    phi_diff = _wrap_angle(phi_target - phi_0)
+    if distance_3d < config.EPSILON:
+        return 10.0 ** (config.G_MAX_DBI / 10.0)  # 重合时返回最大增益
     
-    # 3GPP天线模型
-    attenuation_db = min(
-        12.0 * (theta_diff / config.THETA_3DB)**2 + 12.0 * (phi_diff / config.PHI_3DB)**2,
-        config.SLA_DB
-    )
+    # 目标方向的单位向量
+    target_vec = np.array([dx, dy, dz]) / distance_3d
+    
+    # 波束方向的单位向量（从球坐标转换）
+    theta_0_rad = np.radians(theta_0)
+    phi_0_rad = np.radians(phi_0)
+    beam_vec = np.array([
+        np.sin(theta_0_rad) * np.cos(phi_0_rad),
+        np.sin(theta_0_rad) * np.sin(phi_0_rad),
+        np.cos(theta_0_rad)
+    ])
+    
+    # 计算真实角度偏差（两向量夹角）
+    cos_angle = np.clip(np.dot(beam_vec, target_vec), -1.0, 1.0)
+    angular_deviation = np.degrees(np.arccos(cos_angle))
+    
+    # 使用真实角度偏差计算增益衰减
+    # G = G_max - min(12*(Δ/θ_3dB)², SLA)
+    attenuation_db = min(12.0 * (angular_deviation / config.THETA_3DB)**2, config.SLA_DB)
     return 10.0 ** ((config.G_MAX_DBI - attenuation_db) / 10.0)
 
 
 def calculate_channel_gain(pos1: np.ndarray, pos2: np.ndarray, 
                            beam_direction: tuple[float, float] | None = None) -> float:
     """
-    计算两点之间的信道增益，考虑LoS/NLoS概率和3D波束赋形。
+    计算两点之间的信道增益，支持任意 3D 相对位置。
+    
+    链路类型判断：
+    - 有波束方向时：UAV-UE 链路，应用波束增益
+    - 无波束方向时：UAV-UAV 或 UAV-MBS 链路，不应用波束增益
     
     Args:
         pos1, pos2: 位置 [x, y, z]
-        beam_direction: UAV波束指向 (theta_0, phi_0)，仅用于空对地链路
+        beam_direction: UAV波束指向 (theta_0, phi_0)，仅用于 UAV-UE 链路
     
     Returns:
         信道增益（线性值）
     """
     distance = np.sqrt(np.sum((pos1 - pos2) ** 2))
-    is_air_to_ground = (pos1[2] < 1.0) or (pos2[2] < 1.0)
+    path_loss = _calculate_path_loss(distance)
     
-    if is_air_to_ground:
-        pos_ground, pos_aerial = (pos1, pos2) if pos1[2] < pos2[2] else (pos2, pos1)
-        
-        elevation_angle = _calculate_elevation_angle(pos_ground, pos_aerial)
-        p_los = _calculate_los_probability(elevation_angle)
-        
-        path_loss = _calculate_path_loss(distance)
-        nlos_factor = 10.0 ** (config.NLOS_ADDITIONAL_LOSS_DB / 10.0)
-        avg_path_loss = p_los * path_loss + (1.0 - p_los) * path_loss * nlos_factor
-        
-        beam_gain = _calculate_beam_gain(pos_aerial, pos_ground, beam_direction) if beam_direction else 1.0
+    # 计算 LoS 概率
+    p_los = _calculate_los_probability(pos1, pos2)
+    
+    # NLoS 额外损耗
+    nlos_factor = 10.0 ** (config.NLOS_ADDITIONAL_LOSS_DB / 10.0)
+    avg_path_loss = p_los * path_loss + (1.0 - p_los) * path_loss * nlos_factor
+    
+    # 波束增益（仅 UAV-UE 链路有波束方向）
+    if beam_direction is not None:
+        # 确定 UAV 位置（用于波束增益计算）
+        # 通常 pos1 是 UE，pos2 是 UAV（调用时的惯例）
+        # 但需要兼容两种调用顺序
+        beam_gain = _calculate_beam_gain(pos2, pos1, beam_direction)
     else:
-        avg_path_loss = _calculate_path_loss(distance)
         beam_gain = 1.0
     
     return config.G_CONSTS_PRODUCT * beam_gain / (avg_path_loss + config.EPSILON)
