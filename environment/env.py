@@ -123,31 +123,36 @@ class Env:
         """Construct local observation vector for each UAV agent.
         
         Observation structure per UAV:
-        - Own state: position (2) + cache (NUM_FILES)
-        - Neighbors: (position (2) + cache (NUM_FILES)) × MAX_UAV_NEIGHBORS
-        - UEs: (position (2) + request_info (3)) × MAX_ASSOCIATED_UES
+        - Own state: position (3) + cache (NUM_FILES)
+        - Neighbors: (position (3) + cache (NUM_FILES)) × MAX_UAV_NEIGHBORS
+        - UEs: (position (3) + request_info (3)) × MAX_ASSOCIATED_UES
         """
         all_obs: list[np.ndarray] = []
         
+        # Normalization constants for 3D positions
+        pos_norm = np.array([config.AREA_WIDTH, config.AREA_HEIGHT, config.UAV_MAX_ALT])
+        
         for uav in self._uavs:
             # Part 1: Own state (position and cache status)
-            own_pos: np.ndarray = uav.pos[:2] / np.array([config.AREA_WIDTH, config.AREA_HEIGHT])
+            own_pos: np.ndarray = uav.pos / pos_norm
             own_cache: np.ndarray = uav.cache.astype(np.float32)
             own_state: np.ndarray = np.concatenate([own_pos, own_cache])
 
             # Part 2: Neighbors state (positions and cache status)
-            neighbor_states: np.ndarray = np.zeros((config.MAX_UAV_NEIGHBORS, 2 + config.NUM_FILES))
+            neighbor_states: np.ndarray = np.zeros((config.MAX_UAV_NEIGHBORS, 3 + config.NUM_FILES))
             neighbors: list[UAV] = sorted(uav.neighbors, key=lambda n: float(np.linalg.norm(uav.pos - n.pos)))[: config.MAX_UAV_NEIGHBORS]
             for i, neighbor in enumerate(neighbors):
-                relative_pos: np.ndarray = (neighbor.pos[:2] - uav.pos[:2]) / config.UAV_SENSING_RANGE
+                # Relative 3D position normalized by sensing range
+                relative_pos: np.ndarray = (neighbor.pos - uav.pos) / config.UAV_SENSING_RANGE
                 neighbor_cache: np.ndarray = neighbor.cache.astype(np.float32)
                 neighbor_states[i, :] = np.concatenate([relative_pos, neighbor_cache])
 
             # Part 3: State of associated UEs
-            ue_states: np.ndarray = np.zeros((config.MAX_ASSOCIATED_UES, 2 + 3))
-            ues: list[UE] = sorted(uav.current_covered_ues, key=lambda u: float(np.linalg.norm(uav.pos[:2] - u.pos[:2])))[: config.MAX_ASSOCIATED_UES]
+            ue_states: np.ndarray = np.zeros((config.MAX_ASSOCIATED_UES, 3 + 3))
+            ues: list[UE] = sorted(uav.current_covered_ues, key=lambda u: float(np.linalg.norm(uav.pos - u.pos)))[: config.MAX_ASSOCIATED_UES]
             for i, ue in enumerate(ues):
-                delta_pos: np.ndarray = (ue.pos[:2] - uav.pos[:2]) / config.AREA_WIDTH
+                # Relative 3D position (UE is at ground level, so z difference is significant)
+                delta_pos: np.ndarray = (ue.pos - uav.pos) / pos_norm
                 req_type, _, req_id = ue.current_request
                 norm_id: float = float(req_id) / float(config.NUM_FILES)
                 file_size: float = float(config.FILE_SIZES[req_id])
@@ -163,17 +168,17 @@ class Env:
         return all_obs
 
     def _apply_actions_to_env(self, actions: np.ndarray) -> None:
-        """Calculates next positions and resolves potential collisions iteratively."""
-        current_positions: np.ndarray = np.array([uav.pos[:2] for uav in self._uavs])
+        """Calculates next 3D positions and resolves potential collisions iteratively."""
+        current_positions: np.ndarray = np.array([uav.pos for uav in self._uavs])  # Full 3D positions
         max_dist: float = config.UAV_SPEED * config.TIME_SLOT_DURATION
 
-        # Extract movement actions (first 2 dimensions only)
-        movement_actions: np.ndarray = np.array(actions[:, :2], dtype=np.float32)
+        # Extract movement actions (first 3 dimensions: dx, dy, dz)
+        movement_actions: np.ndarray = np.array(actions[:, :3], dtype=np.float32)
 
-        # Interpret actions as a direct (x, y) vector
+        # Interpret actions as a direct (x, y, z) vector
         delta_vec_raw: np.ndarray = movement_actions
 
-        # Calculate the magnitude (distance) of this raw vector
+        # Calculate the magnitude (distance) of this raw 3D vector
         raw_magnitude: np.ndarray = np.linalg.norm(delta_vec_raw, axis=1, keepdims=True)
 
         # Clip the magnitude to be at most 1.0
@@ -185,12 +190,23 @@ class Env:
 
         proposed_positions: np.ndarray = current_positions + delta_pos
 
+        # Check boundary violations (3D)
         min_boundary_gap: float = config.UAV_COVERAGE_RADIUS / 2.0
         for i, uav in enumerate(self._uavs):
-            if not (min_boundary_gap <= proposed_positions[i, 0] <= config.AREA_WIDTH - min_boundary_gap and min_boundary_gap <= proposed_positions[i, 1] <= config.AREA_HEIGHT - min_boundary_gap):
+            in_xy_bounds = (min_boundary_gap <= proposed_positions[i, 0] <= config.AREA_WIDTH - min_boundary_gap and 
+                           min_boundary_gap <= proposed_positions[i, 1] <= config.AREA_HEIGHT - min_boundary_gap)
+            in_z_bounds = config.UAV_MIN_ALT <= proposed_positions[i, 2] <= config.UAV_MAX_ALT
+            if not (in_xy_bounds and in_z_bounds):
                 uav.boundary_violation = True
-        next_positions: np.ndarray = np.clip(proposed_positions, [min_boundary_gap, min_boundary_gap], [config.AREA_WIDTH - min_boundary_gap, config.AREA_HEIGHT - min_boundary_gap])
+        
+        # Clip to valid 3D boundaries
+        next_positions: np.ndarray = np.clip(
+            proposed_positions, 
+            [min_boundary_gap, min_boundary_gap, config.UAV_MIN_ALT], 
+            [config.AREA_WIDTH - min_boundary_gap, config.AREA_HEIGHT - min_boundary_gap, config.UAV_MAX_ALT]
+        )
 
+        # 3D collision detection and resolution
         min_sep_sq: float = config.MIN_UAV_SEPARATION**2
         for _ in range(config.COLLISION_AVOIDANCE_ITERATIONS + 1):
             collision_detected_in_iter: bool = False
@@ -198,7 +214,7 @@ class Env:
                 for j in range(i + 1, config.NUM_UAVS):
                     pos_i: np.ndarray = next_positions[i]
                     pos_j: np.ndarray = next_positions[j]
-                    dist_sq: float = np.sum((pos_i - pos_j) ** 2)
+                    dist_sq: float = np.sum((pos_i - pos_j) ** 2)  # 3D distance squared
                     if dist_sq < min_sep_sq:
                         self._uavs[i].collision_violation = True
                         self._uavs[j].collision_violation = True
@@ -206,8 +222,8 @@ class Env:
                         
                         dist: float = np.sqrt(dist_sq)
                         if dist < config.EPSILON:
-                            # If positions are identical, apply random direction
-                            direction = np.random.randn(2)
+                            # If positions are identical, apply random 3D direction
+                            direction = np.random.randn(3)
                             direction /= (np.linalg.norm(direction) + config.EPSILON)
                             dist = config.EPSILON
                         else:
@@ -219,25 +235,30 @@ class Env:
             if not collision_detected_in_iter:
                 break
 
-        final_positions: np.ndarray = np.clip(next_positions, [min_boundary_gap, min_boundary_gap], [config.AREA_WIDTH - min_boundary_gap, config.AREA_HEIGHT - min_boundary_gap])
+        # Final clip to ensure within 3D boundaries after collision resolution
+        final_positions: np.ndarray = np.clip(
+            next_positions, 
+            [min_boundary_gap, min_boundary_gap, config.UAV_MIN_ALT], 
+            [config.AREA_WIDTH - min_boundary_gap, config.AREA_HEIGHT - min_boundary_gap, config.UAV_MAX_ALT]
+        )
         for i, uav in enumerate(self._uavs):
             uav.update_position(final_positions[i])
 
     def _apply_beam_actions(self, actions: np.ndarray) -> None:
         """Apply beam control actions from the agent.
         
-        Actions format: [dx, dy, beam_theta, beam_phi] where beam_* are in [-1, 1]
+        Actions format: [dx, dy, dz, beam_theta, beam_phi] where beam_* are in [-1, 1]
         
         Two modes:
         - offset: beam angles are offsets from centroid direction
         - absolute: beam angles are absolute values
         """
         for i, uav in enumerate(self._uavs):
-            if actions.shape[1] < 4:
+            if actions.shape[1] < 5:
                 continue  # No beam control in action
             
-            beam_action_theta = float(actions[i, 2])
-            beam_action_phi = float(actions[i, 3])
+            beam_action_theta = float(actions[i, 3])
+            beam_action_phi = float(actions[i, 4])
             
             if config.BEAM_CONTROL_MODE == "offset":
                 # Offset mode: [-1, 1] -> [-BEAM_OFFSET_RANGE, +BEAM_OFFSET_RANGE]

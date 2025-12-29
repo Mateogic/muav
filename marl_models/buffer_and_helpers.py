@@ -139,18 +139,19 @@ def soft_update(target_net: torch.nn.Module, source_net: torch.nn.Module, tau: f
 class GaussianNoise:
     """Gaussian noise with decay for exploration.
     
-    支持分层噪声：波束控制动作使用较小的噪声，因为offset模式下
-    已有质心作为基准，小偏移就能产生效果。
+    支持分层噪声：
+    - 3D位移动作(dx, dy, dz)使用正常噪声
+    - 波束控制动作使用较小的噪声，因为offset模式下已有质心作为基准
     """
 
     def __init__(self) -> None:
         self.scale: float = config.INITIAL_NOISE_SCALE
 
     def sample(self) -> np.ndarray:
-        if config.BEAM_CONTROL_ENABLED and config.ACTION_DIM == 4:
-            # 分层噪声：位移用正常噪声，波束用较小噪声
-            movement_noise = np.random.normal(0, self.scale, 2)
-            beam_noise = np.random.normal(0, self.scale * config.BEAM_NOISE_RATIO, 2)
+        if config.BEAM_CONTROL_ENABLED and config.ACTION_DIM == 5:
+            # 分层噪声：3D位移用正常噪声，波束用较小噪声
+            movement_noise = np.random.normal(0, self.scale, 3)  # dx, dy, dz
+            beam_noise = np.random.normal(0, self.scale * config.BEAM_NOISE_RATIO, 2)  # beam_theta, beam_phi
             return np.concatenate([movement_noise, beam_noise])
         else:
             return np.random.normal(0, self.scale, config.ACTION_DIM)

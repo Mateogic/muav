@@ -23,8 +23,9 @@ UE_MAX_DIST: int = 20  # d_max^UE in meters
 UE_MAX_WAIT_TIME: int = 10  # in time slots
 
 # UAV Parameters
-UAV_ALTITUDE: int = 100  # H in meters
-UAV_SPEED: int = 30  # v^UAV in m/s
+UAV_MIN_ALT: float = 50.0   # H_min in meters (minimum flight altitude)
+UAV_MAX_ALT: float = 300.0  # H_max in meters (maximum flight altitude)
+UAV_SPEED: int = 30  # v^UAV in m/s (3D speed limit)
 UAV_STORAGE_CAPACITY: np.ndarray = _config_rng.choice(np.arange(5 * 10**6, 20 * 10**6, 10**6), size=NUM_UAVS)  # S_u in bytes
 UAV_SENSING_RANGE: float = 300.0  # R^sense in meters
 UAV_COVERAGE_RADIUS: float = 100.0  # R in meters
@@ -105,10 +106,10 @@ ALPHA_3: float = 3.0   # weightage for fairness/JFI (reward)
 ALPHA_RATE: float = 5.0  # weightage for system throughput (reward, beam control feedback)
 REWARD_SCALING_FACTOR: float = 0.05  # scaling factor for rewards (reduced due to larger weights)
 
-OBS_DIM_SINGLE: int = 2 + NUM_FILES + (MAX_UAV_NEIGHBORS * (2 + NUM_FILES)) + (MAX_ASSOCIATED_UES * (2 + 3))
-# own state: pos (2) + cache (NUM_FILES) + Neighbors: pos (2) + cache (NUM_FILES) + UEs: pos (2) + request_tuple (3)
+OBS_DIM_SINGLE: int = 3 + NUM_FILES + (MAX_UAV_NEIGHBORS * (3 + NUM_FILES)) + (MAX_ASSOCIATED_UES * (3 + 3))
+# own state: pos (3) + cache (NUM_FILES) + Neighbors: pos (3) + cache (NUM_FILES) + UEs: pos (3) + request_tuple (3)
 
-ACTION_DIM: int = 4 if BEAM_CONTROL_ENABLED else 2  # [dx, dy] 或 [dx, dy, beam_theta, beam_phi]
+ACTION_DIM: int = 5 if BEAM_CONTROL_ENABLED else 3  # [dx, dy, dz] 或 [dx, dy, dz, beam_theta, beam_phi]
 STATE_DIM: int = NUM_UAVS * OBS_DIM_SINGLE
 MLP_HIDDEN_DIM: int = 768  # increased for high-dim critic input (7660 -> 768)
 

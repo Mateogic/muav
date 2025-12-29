@@ -16,7 +16,11 @@ def _try_add_file_to_cache(uav: UAV, file_id: int) -> None:
 class UAV:
     def __init__(self, uav_id: int) -> None:
         self.id: int = uav_id
-        self.pos: np.ndarray = np.array([np.random.uniform(0, config.AREA_WIDTH), np.random.uniform(0, config.AREA_HEIGHT), config.UAV_ALTITUDE])
+        self.pos: np.ndarray = np.array([
+            np.random.uniform(0, config.AREA_WIDTH),
+            np.random.uniform(0, config.AREA_HEIGHT),
+            np.random.uniform(config.UAV_MIN_ALT, config.UAV_MAX_ALT)
+        ])
 
         self._dist_moved: float = 0.0  # Distance moved in the current time slot
         self._current_covered_ues: list[UE] = []
@@ -128,10 +132,10 @@ class UAV:
         self.boundary_violation = False
 
     def update_position(self, next_pos: np.ndarray) -> None:
-        """Update the UAV's position to the new location chosen by the MARL agent."""
-        new_pos: np.ndarray = np.append(next_pos, config.UAV_ALTITUDE)
-        self._dist_moved = float(np.linalg.norm(new_pos - self.pos))
-        self.pos = new_pos
+        """Update the UAV's position to the new 3D location chosen by the MARL agent."""
+        # next_pos is now a full 3D position [x, y, z]
+        self._dist_moved = float(np.linalg.norm(next_pos - self.pos))
+        self.pos = next_pos
 
     def set_neighbors(self, all_uavs: list[UAV]) -> None:
         """Set neighboring UAVs within sensing range for this UAV."""
