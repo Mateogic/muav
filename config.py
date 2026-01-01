@@ -7,15 +7,15 @@ SEED: int = 1234  # random seed for reproducibility
 # Initialize random state for config parameters to ensure reproducibility
 _config_rng = np.random.RandomState(SEED)
 STEPS_PER_EPISODE: int = 1000  # total T
-LOG_FREQ: int = 10  # episodes
-IMG_FREQ: int = 500  # steps (increased from 100 to reduce I/O overhead)
-TEST_LOG_FREQ: int = 1  # episodes (for testing)
-TEST_IMG_FREQ: int = 100  # steps (for testing)
+LOG_FREQ: int = 50  # episodes
+IMG_FREQ: int = 500  # steps (increased to reduce I/O overhead)
+TEST_LOG_FREQ: int = 10  # episodes (for testing)
+TEST_IMG_FREQ: int = 1000  # steps (for testing)
 
 # Simulation Parameters
 MBS_POS: np.ndarray = np.array([500.0, 500.0, 300.0])  # (X_mbs, Y_mbs, Z_mbs) in meters
-NUM_UAVS: int = 6  # U
-NUM_UES: int = 60  # M
+NUM_UAVS: int = 10  # U
+NUM_UES: int = 100  # M
 AREA_WIDTH: int = 1000  # X_max in meters
 AREA_HEIGHT: int = 1000  # Y_max in meters
 TIME_SLOT_DURATION: float = 1.0  # tau in seconds
@@ -35,9 +35,9 @@ UAV_MAX_ALT: float = 500.0  # H_max in meters (maximum flight altitude)
 UAV_SPEED: int = 30  # v^UAV in m/s (3D speed limit)
 UAV_STORAGE_CAPACITY: np.ndarray = _config_rng.choice(np.arange(5 * 10**6, 20 * 10**6, 10**6), size=NUM_UAVS)  # S_u in bytes
 UAV_SENSING_RANGE: float = 500.0  # R^sense in meters
-UAV_COVERAGE_RADIUS: float = 200.0  # R in meters (3D spherical coverage)
-MIN_UAV_SEPARATION: float = 400.0  # d_min in meters
-assert UAV_COVERAGE_RADIUS * 2 <= MIN_UAV_SEPARATION
+UAV_COVERAGE_RADIUS: float = 250.0  # R in meters (3D spherical coverage)
+MIN_UAV_SEPARATION: float = 2*UAV_COVERAGE_RADIUS*0.9  # 允许 10% 覆盖重叠
+# assert UAV_COVERAGE_RADIUS * 2 <= MIN_UAV_SEPARATION  # 已注释：允许覆盖重叠
 assert UAV_SENSING_RANGE >= MIN_UAV_SEPARATION
 
 # Collision Avoidance and Penalties
@@ -46,7 +46,7 @@ COLLISION_PENALTY: float = 100.0  # penalty per collision
 BOUNDARY_PENALTY: float = 100.0  # penalty for going out of bounds
 NON_SERVED_LATENCY_PENALTY: float = 20.0  # penalty in latency for non-served requests
 # IMPORTANT : Reconfigurable, should try for various values including : NUM_UAVS - 1 and NUM_UES
-MAX_UAV_NEIGHBORS: int = min(5, NUM_UAVS - 1)
+MAX_UAV_NEIGHBORS: int = min(3, NUM_UAVS - 1)
 MAX_ASSOCIATED_UES: int = min(30, NUM_UES // NUM_UAVS + 10)
 assert MAX_UAV_NEIGHBORS >= 1 and MAX_UAV_NEIGHBORS <= NUM_UAVS - 1
 assert MAX_ASSOCIATED_UES >= 1 and MAX_ASSOCIATED_UES <= NUM_UES
@@ -55,7 +55,7 @@ POWER_MOVE: float = 60.0  # P_move in Watts
 POWER_HOVER: float = 40.0  # P_hover in Watts
 
 # Content Parameters (for caching)
-NUM_CONTENTS: int = 100  # K - number of content files that can be cached
+NUM_CONTENTS: int = 40  # K - number of content files that can be cached
 NUM_FILES: int = NUM_CONTENTS  # Total cacheable files
 FILE_SIZES: np.ndarray = _config_rng.randint(10**5, 5 * 10**5, size=NUM_FILES)  # in bytes
 REQUEST_MSG_SIZE: int = 100  # 请求消息大小 (bytes)，用于上行链路
@@ -107,14 +107,18 @@ BEAM_OFFSET_RANGE: float = 30.0          # offset模式下的最大偏移范围 
 
 # Reward weights (balanced based on std analysis for multi-objective learning)
 # Design: Each component should have similar std contribution for balanced gradients
-ALPHA_1: float = 14.0  # weightage for latency (penalty)
-ALPHA_2: float = 14.0  # weightage for energy (penalty)
-ALPHA_3: float = 3.0   # weightage for fairness/JFI (reward)
+ALPHA_1: float = 8.0  # weightage for latency (penalty)
+ALPHA_2: float = 8.0  # weightage for energy (penalty)
+ALPHA_3: float = 10.0   # weightage for fairness/JFI (reward)
 ALPHA_RATE: float = 5.0  # weightage for system throughput (reward, beam control feedback)
 REWARD_SCALING_FACTOR: float = 0.05  # scaling factor for rewards (reduced due to larger weights)
 
-OBS_DIM_SINGLE: int = 3 + NUM_FILES + (MAX_UAV_NEIGHBORS * (3 + NUM_FILES)) + (MAX_ASSOCIATED_UES * (3 + 3))
-# own state: pos (3) + cache (NUM_FILES) + Neighbors: pos (3) + cache (NUM_FILES) + UEs: pos (3) + request_tuple (3)
+# UE state: pos(3) + request(3) + direction_angles(2) for absolute beam control
+UE_STATE_DIM: int = 3 + 3 + 2 if BEAM_CONTROL_ENABLED else 3 + 3
+# Neighbor state: pos(3) + immediate_help(1) + complementarity(1) = 5
+NEIGHBOR_STATE_DIM: int = 3 + 2
+OBS_DIM_SINGLE: int = 3 + NUM_FILES + (MAX_UAV_NEIGHBORS * NEIGHBOR_STATE_DIM) + (MAX_ASSOCIATED_UES * UE_STATE_DIM)
+# own state: pos (3) + cache (NUM_FILES) + Neighbors: pos (3) + compressed_cache (2) + UEs: pos (3) + request (3) [+ direction angles (2)]
 
 ACTION_DIM: int = 5 if BEAM_CONTROL_ENABLED else 3  # [dx, dy, dz] 或 [dx, dy, dz, beam_theta, beam_phi]
 STATE_DIM: int = NUM_UAVS * OBS_DIM_SINGLE

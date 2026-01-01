@@ -28,7 +28,7 @@ class Env:
         self._prepare_for_next_step()
         return self._get_obs()
 
-    def step(self, actions: np.ndarray) -> tuple[list[np.ndarray], list[float], tuple[float, float, float]]:
+    def step(self, actions: np.ndarray) -> tuple[list[np.ndarray], list[float], tuple[float, float, float, float]]:
         """Execute one time step of the simulation."""
         self._time_step += 1
 
@@ -125,7 +125,10 @@ class Env:
         Observation structure per UAV:
         - Own state: position (3) + cache (NUM_FILES)
         - Neighbors: (position (3) + cache (NUM_FILES)) × MAX_UAV_NEIGHBORS
-        - UEs: (position (3) + request_info (3)) × MAX_ASSOCIATED_UES
+        - UEs: (position (3) + request_info (3) [+ direction_angles (2)]) × MAX_ASSOCIATED_UES
+        
+        When BEAM_CONTROL_ENABLED, UE states include spherical direction angles (theta, phi)
+        to help the agent learn the mapping from observation to beam direction actions.
         """
         all_obs: list[np.ndarray] = []
         
@@ -140,27 +143,73 @@ class Env:
             own_state: np.ndarray = np.concatenate([own_pos, own_cache])
 
             # Part 2: Neighbors state (positions and cache status)
-            neighbor_states: np.ndarray = np.zeros((config.MAX_UAV_NEIGHBORS, 3 + config.NUM_FILES))
+            # Compressed neighbor features: 3 (pos) + 2 (cache stats) = 5 dims
+            neighbor_states: np.ndarray = np.zeros((config.MAX_UAV_NEIGHBORS, 3 + 2))
             neighbors: list[UAV] = sorted(uav.neighbors, key=lambda n: float(np.linalg.norm(uav.pos - n.pos)))[: config.MAX_UAV_NEIGHBORS]
+            
+            # Pre-calculate current requested files by served UEs for "Immediate Reward" feature
+            my_requested_files = set()
+            for ue in uav.current_covered_ues:
+                req_type, _, req_id = ue.current_request
+                if req_type == 1: # Only consider content requests
+                    my_requested_files.add(req_id)
+
             for i, neighbor in enumerate(neighbors):
                 # Relative 3D position normalized by sensing range
                 relative_pos: np.ndarray = (neighbor.pos - uav.pos) / config.UAV_SENSING_RANGE
-                neighbor_cache: np.ndarray = neighbor.cache.astype(np.float32)
-                neighbor_states[i, :] = np.concatenate([relative_pos, neighbor_cache])
+                
+                # Feature 1: Immediate Help Capability (Immediate Reward)
+                # Does neighbor have ANY file I currently need?
+                # 1.0 if neighbor has at least one file I need, 0.0 otherwise
+                immediate_help = 0.0
+                for file_id in my_requested_files:
+                    if neighbor.cache[file_id]:
+                        immediate_help = 1.0
+                        break
+                
+                # Feature 2: Cache Similarity (Long-term Potential)
+                # Jaccard Similarity: Intersection / Union
+                # We use 1 - Similarity to represent "Complementarity" or "Difference"
+                # If we are very different (Similarity low), Complementarity is high (1.0)
+                intersection = np.sum(np.logical_and(uav.cache, neighbor.cache))
+                union = np.sum(np.logical_or(uav.cache, neighbor.cache))
+                similarity = intersection / (union + config.EPSILON)
+                complementarity = 1.0 - similarity
+                
+                neighbor_features = np.array([immediate_help, complementarity], dtype=np.float32)
+                neighbor_states[i, :] = np.concatenate([relative_pos, neighbor_features])
 
             # Part 3: State of associated UEs
-            ue_states: np.ndarray = np.zeros((config.MAX_ASSOCIATED_UES, 3 + 3))
+            ue_states: np.ndarray = np.zeros((config.MAX_ASSOCIATED_UES, config.UE_STATE_DIM))
             ues: list[UE] = sorted(uav.current_covered_ues, key=lambda u: float(np.linalg.norm(uav.pos - u.pos)))[: config.MAX_ASSOCIATED_UES]
             for i, ue in enumerate(ues):
                 # Relative 3D position normalized by coverage radius (球形覆盖范围内)
-                delta_pos: np.ndarray = (ue.pos - uav.pos) / config.UAV_COVERAGE_RADIUS
+                raw_delta: np.ndarray = ue.pos - uav.pos
+                delta_pos: np.ndarray = raw_delta / config.UAV_COVERAGE_RADIUS
                 req_type, _, req_id = ue.current_request
                 norm_id: float = float(req_id) / float(config.NUM_FILES)
                 file_size: float = float(config.FILE_SIZES[req_id])
                 max_file_size: float = float(np.max(config.FILE_SIZES))
                 norm_size: float = file_size / max_file_size
                 request_info: np.ndarray = np.array([req_type, norm_size, norm_id], dtype=np.float32)
-                ue_states[i, :] = np.concatenate([delta_pos, request_info])
+                
+                if config.BEAM_CONTROL_ENABLED:
+                    # Calculate spherical direction angles for beam control guidance
+                    # These angles directly correspond to the action output for absolute beam control
+                    # Action mapping: theta = (action + 1) / 2 * 180, so action = theta/90 - 1
+                    # Observation should output the same normalized value as the desired action
+                    dist: float = float(np.linalg.norm(raw_delta)) + config.EPSILON
+                    # theta: 0° = zenith (z+), 180° = nadir (z-)
+                    # arccos(z/dist) gives angle from z+ axis: z>0 → small angle, z<0 → large angle
+                    theta_rad: float = np.arccos(np.clip(raw_delta[2] / dist, -1.0, 1.0))
+                    phi_rad: float = np.arctan2(raw_delta[1], raw_delta[0])  # -pi to pi
+                    # Normalize to match action space: action = theta/90 - 1, so theta_norm ∈ [-1, 1]
+                    theta_norm: float = (theta_rad / np.pi) * 2.0 - 1.0  # [0, pi] -> [-1, 1]
+                    phi_norm: float = phi_rad / np.pi  # [-pi, pi] -> [-1, 1]
+                    direction_angles: np.ndarray = np.array([theta_norm, phi_norm], dtype=np.float32)
+                    ue_states[i, :] = np.concatenate([delta_pos, request_info, direction_angles])
+                else:
+                    ue_states[i, :] = np.concatenate([delta_pos, request_info])
 
             # Part 4: Combine all parts into a single, flat observation vector
             obs: np.ndarray = np.concatenate([own_state, neighbor_states.flatten(), ue_states.flatten()])
@@ -324,8 +373,8 @@ class Env:
                 
                 ue.interference_power = total_interference
 
-    def _get_rewards_and_metrics(self) -> tuple[list[float], tuple[float, float, float]]:
-        """Returns the reward and other metrics."""
+    def _get_rewards_and_metrics(self) -> tuple[list[float], tuple[float, float, float, float]]:
+        """Returns the reward and other metrics (latency, energy, jfi, total_rate)."""
         total_latency: float = sum(ue.latency_current_request if ue.assigned else config.NON_SERVED_LATENCY_PENALTY for ue in self._ues)
         total_energy: float = sum(uav.energy for uav in self._uavs)
         sc_metrics: np.ndarray = np.array([ue.service_coverage for ue in self._ues])
@@ -352,4 +401,4 @@ class Env:
             if uav.boundary_violation:
                 rewards[uav.id] -= config.BOUNDARY_PENALTY
         rewards = [r * config.REWARD_SCALING_FACTOR for r in rewards]
-        return rewards, (total_latency, total_energy, jfi)
+        return rewards, (total_latency, total_energy, jfi, total_rate)

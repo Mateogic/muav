@@ -10,12 +10,18 @@ class Log:
         self.latencies: list[float] = []
         self.energies: list[float] = []
         self.fairness_scores: list[float] = []
+        self.rates: list[float] = []
+        self.collisions: list[int] = []
+        self.boundaries: list[int] = []
 
-    def append(self, reward: float, latency: float, energy: float, fairness: float) -> None:
+    def append(self, reward: float, latency: float, energy: float, fairness: float, rate: float, collisions: int, boundaries: int) -> None:
         self.rewards.append(reward)
         self.latencies.append(latency)
         self.energies.append(energy)
         self.fairness_scores.append(fairness)
+        self.rates.append(rate)
+        self.collisions.append(collisions)
+        self.boundaries.append(boundaries)
 
 
 class Logger:
@@ -64,17 +70,44 @@ class Logger:
         latencies_slice: np.ndarray = np.array(log.latencies[-log_freq:])
         energies_slice: np.ndarray = np.array(log.energies[-log_freq:])
         fairness_slice: np.ndarray = np.array(log.fairness_scores[-log_freq:])
+        rates_slice: np.ndarray = np.array(log.rates[-log_freq:])
+        collisions_slice: np.ndarray = np.array(log.collisions[-log_freq:])
+        boundaries_slice: np.ndarray = np.array(log.boundaries[-log_freq:])
 
         reward_avg: float = float(np.mean(rewards_slice))
         latency_avg: float = float(np.mean(latencies_slice))
         energy_avg: float = float(np.mean(energies_slice))
         fairness_avg: float = float(np.mean(fairness_slice))
-        log_msg: str = f"🔄 {name.title()} {progress_step} | " f"Total Reward: {reward_avg:.3f} | " f"Total Latency: {latency_avg:.3f} | " f"Total Energy: {energy_avg:.3f} | " f"Final Fairness: {fairness_avg:.3f} | " f"Elapsed Time: {elapsed_time:.2f}s\n"
+        rate_avg: float = float(np.mean(rates_slice))
+        collisions_sum: int = int(np.sum(collisions_slice))
+        boundaries_sum: int = int(np.sum(boundaries_slice))
+
+        log_msg: str = (
+            f"🔄 {name.title()} {progress_step} | "
+            f"Reward: {reward_avg:.3f} | "
+            f"Lat: {latency_avg:.1f} | "
+            f"Eng: {energy_avg:.1f} | "
+            f"JFI: {fairness_avg:.3f} | "
+            f"Rate: {rate_avg:.1f} | "
+            f"Col: {collisions_sum} | "
+            f"Bnd: {boundaries_sum} | "
+            f"Time: {elapsed_time:.2f}s\n"
+        )
 
         with open(self.log_file_path, "a", encoding="utf-8") as f:
             f.write(log_msg)
 
-        data_entry: dict = {name.lower(): progress_step, "reward": reward_avg, "latency": latency_avg, "energy": energy_avg, "fairness": fairness_avg, "time": elapsed_time}
+        data_entry: dict = {
+            name.lower(): progress_step,
+            "reward": reward_avg,
+            "latency": latency_avg,
+            "energy": energy_avg,
+            "fairness": fairness_avg,
+            "rate": rate_avg,
+            "collisions": collisions_sum,
+            "boundaries": boundaries_sum,
+            "time": elapsed_time
+        }
         json_data: list[dict] = []
 
         if os.path.exists(self.json_file_path):

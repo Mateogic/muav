@@ -20,6 +20,9 @@ def test_model(env: Env, model: MARLModel, logger: Logger, num_episodes: int) ->
         episode_latency: float = 0.0
         episode_energy: float = 0.0
         episode_fairness: float = 0.0
+        episode_rate: float = 0.0
+        episode_collisions: int = 0
+        episode_boundaries: int = 0
         # reset_trajectories(env)  # tracking code, comment if not needed
         plot_snapshot(env, episode, 0, logger.log_dir, "episode", logger.timestamp, True)
 
@@ -28,7 +31,7 @@ def test_model(env: Env, model: MARLModel, logger: Logger, num_episodes: int) ->
                 plot_snapshot(env, episode, step, logger.log_dir, "episode", logger.timestamp)
 
             actions: np.ndarray = model.select_actions(obs, exploration=False)
-            next_obs, rewards, (total_latency, total_energy, jfi) = env.step(actions)
+            next_obs, rewards, (total_latency, total_energy, jfi, total_rate) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
             done: bool = step >= config.STEPS_PER_EPISODE
             obs = next_obs
@@ -37,10 +40,18 @@ def test_model(env: Env, model: MARLModel, logger: Logger, num_episodes: int) ->
             episode_latency += total_latency
             episode_energy += total_energy
             episode_fairness = jfi
+            episode_rate += total_rate
+            
+            for uav in env.uavs:
+                if uav.collision_violation:
+                    episode_collisions += 1
+                if uav.boundary_violation:
+                    episode_boundaries += 1
+            
             if done:
                 break
 
-        episode_log.append(episode_reward, episode_latency, episode_energy, episode_fairness)
+        episode_log.append(episode_reward, episode_latency, episode_energy, episode_fairness, episode_rate, episode_collisions, episode_boundaries)
         if episode % config.TEST_LOG_FREQ == 0:
             elapsed_time: float = time.time() - start_time
             logger.log_metrics(episode, episode_log, config.TEST_LOG_FREQ, elapsed_time, "episode")

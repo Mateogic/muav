@@ -34,6 +34,9 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
         rollout_latency: float = 0.0
         rollout_energy: float = 0.0
         rollout_fairness: float = 0.0
+        rollout_rate: float = 0.0
+        rollout_collisions: int = 0
+        rollout_boundaries: int = 0
         # reset_trajectories(env)  # tracking code, comment if not needed
         plot_snapshot(env, update, 0, logger.log_dir, "update", logger.timestamp, True)
 
@@ -45,7 +48,7 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
             raw_actions, log_probs, values = model.get_action_and_value(obs_arr, state)
             actions: np.ndarray = np.clip(raw_actions, -1.0, 1.0)
 
-            next_obs, rewards, (total_latency, total_energy, jfi) = env.step(actions)
+            next_obs, rewards, (total_latency, total_energy, jfi, total_rate) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
             next_state: np.ndarray = np.concatenate(next_obs, axis=0)
             # For time-limit truncation, we should not treat the episode as "done" for the value update.
@@ -62,6 +65,13 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
             rollout_latency += total_latency
             rollout_energy += total_energy
             rollout_fairness = jfi
+            rollout_rate += total_rate
+            
+            for uav in env.uavs:
+                if uav.collision_violation:
+                    rollout_collisions += 1
+                if uav.boundary_violation:
+                    rollout_boundaries += 1
 
         with torch.no_grad():
             _, _, last_values = model.get_action_and_value(np.array(obs), state)
@@ -74,7 +84,7 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
 
         buffer.clear()
 
-        rollout_log.append(rollout_reward, rollout_latency, rollout_energy, rollout_fairness)
+        rollout_log.append(rollout_reward, rollout_latency, rollout_energy, rollout_fairness, rollout_rate, rollout_collisions, rollout_boundaries)
         if update % config.LOG_FREQ == 0:
             elapsed_time: float = time.time() - start_time
             logger.log_metrics(update, rollout_log, config.LOG_FREQ, elapsed_time, "update")
@@ -101,6 +111,9 @@ def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: i
         episode_latency: float = 0.0
         episode_energy: float = 0.0
         episode_fairness: float = 0.0
+        episode_rate: float = 0.0
+        episode_collisions: int = 0
+        episode_boundaries: int = 0
         # reset_trajectories(env)  # tracking code, comment if not needed
         plot_snapshot(env, episode, 0, logger.log_dir, "episode", logger.timestamp, True)
 
@@ -114,7 +127,7 @@ def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: i
             else:
                 actions = model.select_actions(obs, exploration=True)
 
-            next_obs, rewards, (total_latency, total_energy, jfi) = env.step(actions)
+            next_obs, rewards, (total_latency, total_energy, jfi, total_rate) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
             
             # For time-limit truncation, we should not treat the episode as "done" for the value update.
@@ -131,6 +144,14 @@ def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: i
             episode_latency += total_latency
             episode_energy += total_energy
             episode_fairness = jfi
+            episode_rate += total_rate
+            
+            for uav in env.uavs:
+                if uav.collision_violation:
+                    episode_collisions += 1
+                if uav.boundary_violation:
+                    episode_boundaries += 1
+            
             if done:
                 break
 
@@ -139,7 +160,7 @@ def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: i
             for n in model.noise:
                 n.decay()
 
-        episode_log.append(episode_reward, episode_latency, episode_energy, episode_fairness)
+        episode_log.append(episode_reward, episode_latency, episode_energy, episode_fairness, episode_rate, episode_collisions, episode_boundaries)
         if episode % config.LOG_FREQ == 0:
             elapsed_time: float = time.time() - start_time
             logger.log_metrics(episode, episode_log, config.LOG_FREQ, elapsed_time, "episode")
@@ -161,6 +182,9 @@ def train_random(env: Env, model: MARLModel, logger: Logger, num_episodes: int) 
         episode_latency: float = 0.0
         episode_energy: float = 0.0
         episode_fairness: float = 0.0
+        episode_rate: float = 0.0
+        episode_collisions: int = 0
+        episode_boundaries: int = 0
         # reset_trajectories(env)  # tracking code, comment if not needed
         plot_snapshot(env, episode, 0, logger.log_dir, "episode", logger.timestamp, True)
 
@@ -169,7 +193,7 @@ def train_random(env: Env, model: MARLModel, logger: Logger, num_episodes: int) 
                 plot_snapshot(env, episode, step, logger.log_dir, "episode", logger.timestamp)
 
             actions: np.ndarray = model.select_actions(obs, exploration=False)
-            next_obs, rewards, (total_latency, total_energy, jfi) = env.step(actions)
+            next_obs, rewards, (total_latency, total_energy, jfi, total_rate) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
             done: bool = step >= config.STEPS_PER_EPISODE
             obs = next_obs
@@ -178,10 +202,18 @@ def train_random(env: Env, model: MARLModel, logger: Logger, num_episodes: int) 
             episode_latency += total_latency
             episode_energy += total_energy
             episode_fairness = jfi
+            episode_rate += total_rate
+            
+            for uav in env.uavs:
+                if uav.collision_violation:
+                    episode_collisions += 1
+                if uav.boundary_violation:
+                    episode_boundaries += 1
+            
             if done:
                 break
 
-        episode_log.append(episode_reward, episode_latency, episode_energy, episode_fairness)
+        episode_log.append(episode_reward, episode_latency, episode_energy, episode_fairness, episode_rate, episode_collisions, episode_boundaries)
         if episode % config.LOG_FREQ == 0:
             elapsed_time: float = time.time() - start_time
             logger.log_metrics(episode, episode_log, config.LOG_FREQ, elapsed_time, "episode")
