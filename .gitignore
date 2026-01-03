@@ -11,5 +11,5 @@ train_plots/
 test_plots/
 saved_models/
 *.png
-# *.txt
-# *.json
+*.txt
+*.json

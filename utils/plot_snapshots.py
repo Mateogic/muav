@@ -80,17 +80,31 @@ def plot_snapshot(env: Env, progress_step: int, step: int, save_dir: str, name: 
     ground_ues = [ue for ue in env.ues if ue.pos[2] < 1.0]
     aerial_ues = [ue for ue in env.ues if ue.pos[2] >= 1.0]
     
-    # Plot ground UEs
+    # Plot ground UEs (Black dots)
     if ground_ues:
         ground_pos = np.array([ue.pos for ue in ground_ues])
+        # Base color black
+        colors = ["black"] * len(ground_ues)
+        # Mark served UEs as green
+        for i, ue in enumerate(ground_ues):
+            if ue.assigned:
+                colors[i] = "tab:green"
+        
         ax.scatter(ground_pos[:, 0], ground_pos[:, 1], ground_pos[:, 2], 
-                   c="tab:blue", marker=".", s=15, label="Ground UEs", alpha=0.6, edgecolors='none')
+                   c=colors, marker=".", s=15, label="Ground UEs", alpha=0.6, edgecolors='none')
     
-    # Plot aerial UEs
+    # Plot aerial UEs (Blue dots)
     if aerial_ues:
         aerial_pos = np.array([ue.pos for ue in aerial_ues])
+        # Base color blue
+        colors = ["tab:blue"] * len(aerial_ues)
+        # Mark served UEs as green
+        for i, ue in enumerate(aerial_ues):
+            if ue.assigned:
+                colors[i] = "tab:green"
+
         ax.scatter(aerial_pos[:, 0], aerial_pos[:, 1], aerial_pos[:, 2], 
-                   c="tab:cyan", marker="^", s=25, label="Aerial UEs", alpha=0.7, edgecolors='none')
+                   c=colors, marker=".", s=25, label="Aerial UEs", alpha=0.7, edgecolors='none')
 
     # Plot UAVs and connections
     uav_plotted = False

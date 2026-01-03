@@ -78,8 +78,16 @@ class MADDPG(MARLModel):
             self.critic_optimizers[agent_idx].step()
 
             # Update Actor
-            pred_actions_tensor: torch.Tensor = actions_tensor.detach().clone()
-            pred_actions_tensor[:, agent_idx, :] = self.actors[agent_idx](obs_tensor[:, agent_idx, :])
+            # Use current policy for ALL agents to estimate the gradient direction
+            # This is more stable than using old actions from buffer for other agents
+            current_joint_actions: list[torch.Tensor] = []
+            for i in range(self.num_agents):
+                action = self.actors[i](obs_tensor[:, i, :])
+                if i != agent_idx:
+                    action = action.detach()  # Detach actions of other agents to save computation
+                current_joint_actions.append(action)
+            
+            pred_actions_tensor: torch.Tensor = torch.stack(current_joint_actions, dim=1)
             pred_actions_flat: torch.Tensor = pred_actions_tensor.reshape(batch_size, -1)
 
             actor_loss: torch.Tensor = -self.critics[agent_idx](obs_flat, pred_actions_flat).mean()

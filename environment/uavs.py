@@ -154,8 +154,10 @@ class UAV:
                 self._current_requested_files[req_id] = True
         
         # 更新波束基准方向（指向关联UE的质心）
-        # 优化：仅在 offset 模式下才需要计算基准方向
-        if config.BEAM_CONTROL_MODE == "offset":
+        # 需要计算基准方向的情况：
+        # 1. offset 模式（智能体基于此进行调整）
+        # 2. 智能体控制被禁用（完全依赖规则，即指向质心）
+        if config.BEAM_CONTROL_MODE == "offset" or not config.BEAM_CONTROL_ENABLED:
             ue_positions = [ue.pos for ue in self._current_covered_ues]
             self._beam_direction = comms.calculate_beam_direction(self.pos, ue_positions)
 

@@ -7,7 +7,7 @@ SEED: int = 1234  # random seed for reproducibility
 # Initialize random state for config parameters to ensure reproducibility
 _config_rng = np.random.RandomState(SEED)
 STEPS_PER_EPISODE: int = 1000  # total T
-LOG_FREQ: int = 50  # episodes
+LOG_FREQ: int = 10  # episodes
 IMG_FREQ: int = 500  # steps (increased to reduce I/O overhead)
 TEST_LOG_FREQ: int = 10  # episodes (for testing)
 TEST_IMG_FREQ: int = 1000  # steps (for testing)
@@ -44,7 +44,7 @@ assert UAV_SENSING_RANGE >= MIN_UAV_SEPARATION
 COLLISION_AVOIDANCE_ITERATIONS: int = 20  # number of iterations to resolve collisions
 COLLISION_PENALTY: float = 100.0  # penalty per collision
 BOUNDARY_PENALTY: float = 100.0  # penalty for going out of bounds
-NON_SERVED_LATENCY_PENALTY: float = 20.0  # penalty in latency for non-served requests
+NON_SERVED_LATENCY_PENALTY: float = 60.0  # penalty in latency for non-served requests
 # IMPORTANT : Reconfigurable, should try for various values including : NUM_UAVS - 1 and NUM_UES
 MAX_UAV_NEIGHBORS: int = min(3, NUM_UAVS - 1)
 MAX_ASSOCIATED_UES: int = min(30, NUM_UES // NUM_UAVS + 10)
@@ -109,7 +109,7 @@ BEAM_OFFSET_RANGE: float = 30.0          # offset模式下的最大偏移范围 
 # Design: Each component should have similar std contribution for balanced gradients
 ALPHA_1: float = 8.0  # weightage for latency (penalty)
 ALPHA_2: float = 8.0  # weightage for energy (penalty)
-ALPHA_3: float = 10.0   # weightage for fairness/JFI (reward)
+ALPHA_3: float = 12.0   # weightage for fairness/JFI (reward)
 ALPHA_RATE: float = 5.0  # weightage for system throughput (reward, beam control feedback)
 REWARD_SCALING_FACTOR: float = 0.05  # scaling factor for rewards (reduced due to larger weights)
 
@@ -124,25 +124,25 @@ ACTION_DIM: int = 5 if BEAM_CONTROL_ENABLED else 3  # [dx, dy, dz] 或 [dx, dy, 
 STATE_DIM: int = NUM_UAVS * OBS_DIM_SINGLE
 MLP_HIDDEN_DIM: int = 768  # increased for high-dim critic input (7660 -> 768)
 
-ACTOR_LR: float = 3e-4
-CRITIC_LR: float = 6e-4
+ACTOR_LR: float = 2e-4
+CRITIC_LR: float = 4e-4
 DISCOUNT_FACTOR: float = 0.99  # gamma
-UPDATE_FACTOR: float = 0.01  # tau
-MAX_GRAD_NORM: float = 5.0  # maximum norm for gradient clipping to prevent exploding gradients
+UPDATE_FACTOR: float = 0.005  # tau
+MAX_GRAD_NORM: float = 2.0  # maximum norm for gradient clipping to prevent exploding gradients
 LOG_STD_MAX: float = 2  # maximum log standard deviation for stochastic policies
 LOG_STD_MIN: float = -20  # minimum log standard deviation for stochastic policies
 EPSILON: float = 1e-9  # small value to prevent division by zero
 
 # Off-policy algorithm hyperparameters
 REPLAY_BUFFER_SIZE: int = 10**6  # B
-REPLAY_BATCH_SIZE: int = 256  # minibatch size (increased from 64 for better GPU utilization)
+REPLAY_BATCH_SIZE: int = 512  # minibatch size (increased from 64 for better GPU utilization)
 INITIAL_RANDOM_STEPS: int = 5000  # steps of random actions for exploration
 LEARN_FREQ: int = 4  # steps to learn after
 
 # Gaussian Noise Parameters (for MADDPG and MATD3)
-INITIAL_NOISE_SCALE: float = 0.1
-MIN_NOISE_SCALE: float = 0.01
-NOISE_DECAY_RATE: float = 0.995
+INITIAL_NOISE_SCALE: float = 0.2
+MIN_NOISE_SCALE: float = 0.03
+NOISE_DECAY_RATE: float = 0.998
 BEAM_NOISE_RATIO: float = 0.5  # 波束动作噪声相对于位移动作噪声的比例
 
 # MATD3 Specific Hyperparameters
@@ -151,7 +151,7 @@ TARGET_POLICY_NOISE: float = 0.2  # standard deviation of target policy smoothin
 NOISE_CLIP: float = 0.5  # range to clip target policy smoothing noise
 
 # MAPPO Specific Hyperparameters
-PPO_ROLLOUT_LENGTH: int = 4096  # number of steps to collect per rollout before updating (increased for better GPU utilization)
+PPO_ROLLOUT_LENGTH: int = 1000  # number of steps to collect per rollout (Set to STEPS_PER_EPISODE for episodic tasks)
 PPO_GAE_LAMBDA: float = 0.95  # lambda parameter for GAE
 PPO_EPOCHS: int = 10  # number of epochs to run on the collected rollout data
 PPO_BATCH_SIZE: int = 256  # size of mini-batches to use during the update step (increased from 64 for better GPU utilization)
