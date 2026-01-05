@@ -254,7 +254,8 @@ def generate_plots(
         "reward": [entry["reward"] for entry in log_data],
         "latency": [entry["latency"] for entry in log_data],
         "energy": [entry["energy"] for entry in log_data],
-        "fairness": [entry["fairness"] for entry in log_data]
+        "fairness": [entry["fairness"] for entry in log_data],
+        "rate": [entry["rate"] for entry in log_data],
     }
     
     # 指标配置
@@ -263,6 +264,7 @@ def generate_plots(
         "latency": {"ylabel": "Average Latency (s)", "color": COLORS['secondary']},
         "energy": {"ylabel": "Energy Consumption (J)", "color": COLORS['tertiary']},
         "fairness": {"ylabel": "Jain's Fairness Index", "color": COLORS['success']},
+        "rate": {"ylabel": "System Throughput (bps)", "color": COLORS['quaternary']},
     }
     
     # 绘制单指标曲线

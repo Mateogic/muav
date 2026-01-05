@@ -4,6 +4,34 @@ import config
 import numpy as np
 # 基于强化学习框架，模拟多无人机（UAV）空中基站通信保障环境，管理 UAV、用户设备（UE）和宏基站（MBS）的状态、动作和奖励。
 
+
+class RunningNormalizer:
+    """使用指数移动平均的动态归一化器，用于平衡多目标奖励的量级。"""
+    
+    def __init__(self, momentum: float = 0.99) -> None:
+        self.momentum = momentum
+        self.mean = 0.0
+        self.var = 1.0
+        self.count = 0
+    
+    def normalize(self, x: float) -> float:
+        """归一化输入值并更新统计量。"""
+        self.count += 1
+        if self.count == 1:
+            self.mean = x
+            self.var = 1.0
+        else:
+            delta = x - self.mean
+            self.mean = self.momentum * self.mean + (1 - self.momentum) * x
+            self.var = self.momentum * self.var + (1 - self.momentum) * delta ** 2
+        
+        std = np.sqrt(self.var)
+        # 添加安全下限，防止方差过小时导致除零或梯度爆炸
+        if std < 1e-6:
+            std = 1e-6
+        return (x - self.mean) / std
+
+
 class Env:
     def __init__(self) -> None:
         self._mbs_pos: np.ndarray = config.MBS_POS
@@ -11,6 +39,12 @@ class Env:
         self._ues: list[UE] = [UE(i) for i in range(config.NUM_UES)]
         self._uavs: list[UAV] = [UAV(i) for i in range(config.NUM_UAVS)]
         self._time_step: int = 0
+        
+        # 动态归一化器：跨 episode 积累统计量，平衡各奖励分量的量级
+        self._latency_normalizer = RunningNormalizer()
+        self._energy_normalizer = RunningNormalizer()
+        self._jfi_normalizer = RunningNormalizer()
+        self._rate_normalizer = RunningNormalizer()
 
     @property
     def uavs(self) -> list[UAV]:
@@ -374,25 +408,34 @@ class Env:
                 ue.interference_power = total_interference
 
     def _get_rewards_and_metrics(self) -> tuple[list[float], tuple[float, float, float, float]]:
-        """Returns the reward and other metrics (latency, energy, jfi, total_rate)."""
+        """Returns the reward and other metrics (latency, energy, jfi, total_rate).
+        
+        使用动态归一化平衡各奖励分量：
+        1. 先对原始指标取 log（压缩量级差异）
+        2. 使用 RunningNormalizer 动态归一化到 ~N(0,1)
+        3. 各分量乘以权重后相加
+        """
         total_latency: float = sum(ue.latency_current_request if ue.assigned else config.NON_SERVED_LATENCY_PENALTY for ue in self._ues)
         total_energy: float = sum(uav.energy for uav in self._uavs)
+        total_rate: float = sum(uav.total_downlink_rate for uav in self._uavs)
+        
         sc_metrics: np.ndarray = np.array([ue.service_coverage for ue in self._ues])
         jfi: float = 0.0
         if sc_metrics.size > 0 and np.sum(sc_metrics**2) > 0:
             jfi = (np.sum(sc_metrics) ** 2) / (sc_metrics.size * np.sum(sc_metrics**2))
 
-        r_fairness: float = config.ALPHA_3 * np.log(jfi + config.EPSILON)
-        r_latency: float = config.ALPHA_1 * np.log(total_latency + config.EPSILON)
-        r_energy: float = config.ALPHA_2 * np.log(total_energy + config.EPSILON)
+        # 先取 log 再动态归一化，使各分量量级一致
+        log_latency = np.log(total_latency + config.EPSILON)
+        log_energy = np.log(total_energy + config.EPSILON)
+        log_jfi = np.log(jfi + config.EPSILON)
+        log_rate = np.log(total_rate + config.EPSILON)
         
-        # 系统传输速率奖励（波束控制的直接反馈）
-        total_rate: float = sum(uav.total_downlink_rate for uav in self._uavs)
-        # 归一化：使用参考速率避免数值过大
-        reference_rate: float = config.BANDWIDTH_EDGE * np.log2(1 + 100)  # 参考SNR=100时的速率
-        normalized_rate: float = total_rate / (config.NUM_UES * reference_rate + config.EPSILON)
-        r_rate: float = config.ALPHA_RATE * np.log(normalized_rate + config.EPSILON)
+        r_latency: float = config.ALPHA_1 * self._latency_normalizer.normalize(log_latency)
+        r_energy: float = config.ALPHA_2 * self._energy_normalizer.normalize(log_energy)
+        r_fairness: float = config.ALPHA_3 * self._jfi_normalizer.normalize(log_jfi)
+        r_rate: float = config.ALPHA_RATE * self._rate_normalizer.normalize(log_rate)
         
+        # 奖励 = 正向指标 - 负向指标
         reward: float = r_fairness + r_rate - r_latency - r_energy
         rewards: list[float] = [reward] * config.NUM_UAVS
         for uav in self._uavs:

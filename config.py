@@ -105,13 +105,14 @@ BEAM_OFFSET_RANGE: float = 30.0          # offset模式下的最大偏移范围 
 
 # Model Parameters
 
-# Reward weights (balanced based on std analysis for multi-objective learning)
-# Design: Each component should have similar std contribution for balanced gradients
-ALPHA_1: float = 8.0  # weightage for latency (penalty)
-ALPHA_2: float = 8.0  # weightage for energy (penalty)
-ALPHA_3: float = 12.0   # weightage for fairness/JFI (reward)
-ALPHA_RATE: float = 5.0  # weightage for system throughput (reward, beam control feedback)
-REWARD_SCALING_FACTOR: float = 0.05  # scaling factor for rewards (reduced due to larger weights)
+# Reward weights for multi-objective optimization
+# 使用动态归一化后，各分量量级一致，权重直接表达优先级
+# 初始设为 1:1:1:1，可根据训练结果调整
+ALPHA_1: float = 1.0  # weightage for latency (penalty)
+ALPHA_2: float = 1.0  # weightage for energy (penalty)
+ALPHA_3: float = 1.0  # weightage for fairness/JFI (reward)
+ALPHA_RATE: float = 1.0  # weightage for system throughput (reward)
+REWARD_SCALING_FACTOR: float = 1.0  # scaling factor for rewards (动态归一化后量级已合适)
 
 # UE state: pos(3) + request(3) + direction_angles(2) for absolute beam control
 UE_STATE_DIM: int = 3 + 3 + 2 if BEAM_CONTROL_ENABLED else 3 + 3
@@ -137,12 +138,12 @@ EPSILON: float = 1e-9  # small value to prevent division by zero
 REPLAY_BUFFER_SIZE: int = 10**6  # B
 REPLAY_BATCH_SIZE: int = 512  # minibatch size (increased from 64 for better GPU utilization)
 INITIAL_RANDOM_STEPS: int = 5000  # steps of random actions for exploration
-LEARN_FREQ: int = 4  # steps to learn after
+LEARN_FREQ: int = 5  # steps to learn after
 
 # Gaussian Noise Parameters (for MADDPG and MATD3)
 INITIAL_NOISE_SCALE: float = 0.2
-MIN_NOISE_SCALE: float = 0.03
-NOISE_DECAY_RATE: float = 0.998
+MIN_NOISE_SCALE: float = 0.04
+NOISE_DECAY_RATE: float = 0.999
 BEAM_NOISE_RATIO: float = 0.5  # 波束动作噪声相对于位移动作噪声的比例
 
 # MATD3 Specific Hyperparameters
@@ -154,7 +155,7 @@ NOISE_CLIP: float = 0.5  # range to clip target policy smoothing noise
 PPO_ROLLOUT_LENGTH: int = 1000  # number of steps to collect per rollout (Set to STEPS_PER_EPISODE for episodic tasks)
 PPO_GAE_LAMBDA: float = 0.95  # lambda parameter for GAE
 PPO_EPOCHS: int = 10  # number of epochs to run on the collected rollout data
-PPO_BATCH_SIZE: int = 256  # size of mini-batches to use during the update step (increased from 64 for better GPU utilization)
+PPO_BATCH_SIZE: int = 512  # size of mini-batches to use during the update step (increased from 64 for better GPU utilization)
 PPO_CLIP_EPS: float = 0.2  # clipping parameter (epsilon) for the PPO surrogate objective
 PPO_VALUE_CLIP_EPS: float = 0.2  # clipping parameter for value function (can be same or different from policy clip)
 PPO_ENTROPY_COEF: float = 0.01  # coefficient for the entropy bonus to encourage exploration
