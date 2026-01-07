@@ -8,7 +8,7 @@ import numpy as np
 class RunningNormalizer:
     """使用指数移动平均的动态归一化器，用于平衡多目标奖励的量级。"""
     
-    def __init__(self, momentum: float = 0.99) -> None:
+    def __init__(self, momentum: float = 0.95) -> None:
         self.momentum = momentum
         self.mean = 0.0
         self.var = 1.0
@@ -62,7 +62,7 @@ class Env:
         self._prepare_for_next_step()
         return self._get_obs()
 
-    def step(self, actions: np.ndarray) -> tuple[list[np.ndarray], list[float], tuple[float, float, float, float]]:
+    def step(self, actions: np.ndarray) -> tuple[list[np.ndarray], list[float], tuple[float, float, float, float, int, int]]:
         """Execute one time step of the simulation."""
         self._time_step += 1
 
@@ -105,12 +105,16 @@ class Env:
         for ue in self._ues:
             ue.update_position()
 
+        # Count violations before resetting logic checks
+        step_collisions = sum(1 for uav in self._uavs if uav.collision_violation)
+        step_boundaries = sum(1 for uav in self._uavs if uav.boundary_violation)
+
         for uav in self._uavs:
             uav.reset_for_next_step()
 
         self._prepare_for_next_step()
         next_obs: list[np.ndarray] = self._get_obs()
-        return next_obs, rewards, metrics
+        return next_obs, rewards, metrics + (step_collisions, step_boundaries)
 
     def _prepare_for_next_step(self) -> None:
         """Prepare environment state for the next time step.

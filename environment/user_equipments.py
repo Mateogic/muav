@@ -1,3 +1,4 @@
+from collections import deque
 import config
 import numpy as np
 # 模拟用户设备（UE）在空中基站通信保障场景中的行为。它管理 UE 的位置、通信需求生成和服务覆盖率。
@@ -50,9 +51,9 @@ class UE:
         self._wait_time: int  # 在到达目标位置后等待的时间步数
         self._set_new_waypoint()  # Initialize first waypoint
 
-        # Fairness Tracking：公平性跟踪
-        self._successful_requests: int = 0  # 成功处理的请求数量
-        self.service_coverage: float = 0.0  # 服务覆盖率（成功请求数 / 总请求数）
+        # Fairness Tracking：滑动窗口公平性跟踪
+        self._service_history: deque[bool] = deque(maxlen=config.FAIRNESS_WINDOW_SIZE)
+        self.service_coverage: float = 0.0  # 滑动窗口内的服务成功率
         
         # Co-channel Interference：同频干扰
         self.interference_power: float = 0.0  # 来自其他UAV的同频干扰功率总和
@@ -90,12 +91,11 @@ class UE:
         self.assigned = False
 
     def update_service_coverage(self, current_time_step_t: int) -> None:
-        """Updates the fairness metric based on service outcome in the current slot."""
-        if self.assigned and self.latency_current_request <= config.TIME_SLOT_DURATION:
-            self._successful_requests += 1
-
-        assert current_time_step_t > 0
-        self.service_coverage = self._successful_requests / current_time_step_t
+        """使用滑动窗口更新服务覆盖率，只考虑最近 N 步的表现。"""
+        success: bool = self.assigned and self.latency_current_request <= config.TIME_SLOT_DURATION
+        self._service_history.append(success)
+        # 滑动窗口内的成功率（窗口未满时使用实际长度）
+        self.service_coverage = sum(self._service_history) / len(self._service_history)
     # 实现 3D 随机游走模型，为 UE 设置新的目标位置和等待时间。
     def _set_new_waypoint(self):
         """Set a new 3D destination and wait time as per the Random Waypoint model."""

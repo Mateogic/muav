@@ -48,7 +48,7 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
             raw_actions, log_probs, values = model.get_action_and_value(obs_arr, state)
             actions: np.ndarray = np.clip(raw_actions, -1.0, 1.0)
 
-            next_obs, rewards, (total_latency, total_energy, jfi, total_rate) = env.step(actions)
+            next_obs, rewards, (total_latency, total_energy, jfi, total_rate, step_collisions, step_boundaries) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
             next_state: np.ndarray = np.concatenate(next_obs, axis=0)
             # For time-limit truncation, we should not treat the episode as "done" for the value update.
@@ -66,12 +66,8 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
             rollout_energy += total_energy
             rollout_fairness = jfi
             rollout_rate += total_rate
-            
-            for uav in env.uavs:
-                if uav.collision_violation:
-                    rollout_collisions += 1
-                if uav.boundary_violation:
-                    rollout_boundaries += 1
+            rollout_collisions += step_collisions
+            rollout_boundaries += step_boundaries
 
         with torch.no_grad():
             _, _, last_values = model.get_action_and_value(np.array(obs), state)
@@ -127,7 +123,7 @@ def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: i
             else:
                 actions = model.select_actions(obs, exploration=True)
 
-            next_obs, rewards, (total_latency, total_energy, jfi, total_rate) = env.step(actions)
+            next_obs, rewards, (total_latency, total_energy, jfi, total_rate, step_collisions, step_boundaries) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
             
             # For time-limit truncation, we should not treat the episode as "done" for the value update.
@@ -145,12 +141,8 @@ def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: i
             episode_energy += total_energy
             episode_fairness = jfi
             episode_rate += total_rate
-            
-            for uav in env.uavs:
-                if uav.collision_violation:
-                    episode_collisions += 1
-                if uav.boundary_violation:
-                    episode_boundaries += 1
+            episode_collisions += step_collisions
+            episode_boundaries += step_boundaries
             
             if done:
                 break
@@ -193,7 +185,7 @@ def train_random(env: Env, model: MARLModel, logger: Logger, num_episodes: int) 
                 plot_snapshot(env, episode, step, logger.log_dir, "episode", logger.timestamp)
 
             actions: np.ndarray = model.select_actions(obs, exploration=False)
-            next_obs, rewards, (total_latency, total_energy, jfi, total_rate) = env.step(actions)
+            next_obs, rewards, (total_latency, total_energy, jfi, total_rate, step_collisions, step_boundaries) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
             done: bool = step >= config.STEPS_PER_EPISODE
             obs = next_obs
@@ -203,12 +195,8 @@ def train_random(env: Env, model: MARLModel, logger: Logger, num_episodes: int) 
             episode_energy += total_energy
             episode_fairness = jfi
             episode_rate += total_rate
-            
-            for uav in env.uavs:
-                if uav.collision_violation:
-                    episode_collisions += 1
-                if uav.boundary_violation:
-                    episode_boundaries += 1
+            episode_collisions += step_collisions
+            episode_boundaries += step_boundaries
             
             if done:
                 break
