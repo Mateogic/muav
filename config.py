@@ -36,7 +36,7 @@ UAV_SPEED: int = 30  # v^UAV in m/s (3D speed limit)
 UAV_STORAGE_CAPACITY: np.ndarray = _config_rng.choice(np.arange(5 * 10**6, 20 * 10**6, 10**6), size=NUM_UAVS)  # S_u in bytes
 UAV_SENSING_RANGE: float = 500.0  # R^sense in meters
 UAV_COVERAGE_RADIUS: float = 250.0  # R in meters (3D spherical coverage)
-MIN_UAV_SEPARATION: float = 2*UAV_COVERAGE_RADIUS*0.9  # 允许 10% 覆盖重叠
+MIN_UAV_SEPARATION: float = 2*UAV_COVERAGE_RADIUS*0.4  # 允许 60% 覆盖重叠
 # assert UAV_COVERAGE_RADIUS * 2 <= MIN_UAV_SEPARATION  # 已注释：允许覆盖重叠
 assert UAV_SENSING_RANGE >= MIN_UAV_SEPARATION
 
@@ -45,8 +45,8 @@ FAIRNESS_WINDOW_SIZE: int = 100  # 公平性计算的滑动窗口大小（最近
 
 # Collision Avoidance and Penalties
 COLLISION_AVOIDANCE_ITERATIONS: int = 20  # number of iterations to resolve collisions
-COLLISION_PENALTY: float = 10.0  # penalty per collision (缩放后约0.30，占奖励范围~46%)
-BOUNDARY_PENALTY: float = 10.0  # penalty for going out of bounds (缩放后约0.30)
+COLLISION_PENALTY: float = 5.0  # penalty per collision (缩放后约0.30，占奖励范围~46%)
+BOUNDARY_PENALTY: float = 5.0  # penalty for going out of bounds (缩放后约0.30)
 NON_SERVED_LATENCY_PENALTY: float = 60.0  # penalty in latency for non-served requests
 # IMPORTANT : Reconfigurable, should try for various values including : NUM_UAVS - 1 and NUM_UES
 MAX_UAV_NEIGHBORS: int = min(3, NUM_UAVS - 1)
@@ -58,7 +58,7 @@ POWER_MOVE: float = 60.0  # P_move in Watts
 POWER_HOVER: float = 40.0  # P_hover in Watts
 
 # Content Parameters (for caching)
-NUM_CONTENTS: int = 40  # K - number of content files that can be cached
+NUM_CONTENTS: int = 20  # K - number of content files that can be cached
 NUM_FILES: int = NUM_CONTENTS  # Total cacheable files
 FILE_SIZES: np.ndarray = _config_rng.randint(10**5, 5 * 10**5, size=NUM_FILES)  # in bytes
 REQUEST_MSG_SIZE: int = 100  # 请求消息大小 (bytes)，用于上行链路
@@ -112,8 +112,8 @@ BEAM_OFFSET_RANGE: float = 30.0          # offset模式下的最大偏移范围 
 # 使用动态归一化后，各分量量级一致，权重直接表达优先级
 # 初始设为 1:1:1:1，可根据训练结果调整
 ALPHA_1: float = 1.0  # weightage for latency (penalty)
-ALPHA_2: float = 0.5  # weightage for energy (penalty)
-ALPHA_3: float = 1.5  # weightage for fairness/JFI (reward)
+ALPHA_2: float = 0.8  # weightage for energy (penalty)
+ALPHA_3: float = 1.2  # weightage for fairness/JFI (reward)
 ALPHA_RATE: float = 1.0  # weightage for system throughput (reward)
 REWARD_SCALING_FACTOR: float = 0.06  # scaling factor for rewards (归一化后保持原量级)
 
@@ -140,13 +140,13 @@ EPSILON: float = 1e-9  # small value to prevent division by zero
 # Off-policy algorithm hyperparameters
 REPLAY_BUFFER_SIZE: int = 2* 10**5  # B，大概包含前200个episode的数据
 REPLAY_BATCH_SIZE: int = 1024  # minibatch size (increased from 64 for better GPU utilization)
-INITIAL_RANDOM_STEPS: int = 5000  # steps of random actions for exploration
+INITIAL_RANDOM_STEPS: int = 10000  # steps of random actions for exploration
 LEARN_FREQ: int = 5  # steps to learn after
 
 # Gaussian Noise Parameters (for MADDPG and MATD3)
 INITIAL_NOISE_SCALE: float = 0.2
-MIN_NOISE_SCALE: float = 0.04
-NOISE_DECAY_RATE: float = 0.9995
+MIN_NOISE_SCALE: float = 0.05
+NOISE_DECAY_RATE: float = 0.9998
 BEAM_NOISE_RATIO: float = 0.5  # 波束动作噪声相对于位移动作噪声的比例
 
 # MATD3 Specific Hyperparameters

@@ -6,30 +6,42 @@ import numpy as np
 
 
 class RunningNormalizer:
-    """使用指数移动平均的动态归一化器，用于平衡多目标奖励的量级。"""
+    """使用指数移动平均的动态归一化器，用于平衡多目标奖励的量级。
     
-    def __init__(self, momentum: float = 0.95) -> None:
+    关键设计：先用旧统计量归一化当前值，再更新统计量。
+    这避免了当前样本影响自身归一化结果的问题。
+    """
+    
+    def __init__(self, momentum: float = 0.99) -> None:
         self.momentum = momentum
         self.mean = 0.0
         self.var = 1.0
         self.count = 0
     
     def normalize(self, x: float) -> float:
-        """归一化输入值并更新统计量。"""
+        """先用旧统计量归一化，再更新统计量。"""
         self.count += 1
+        
         if self.count == 1:
+            # 第一个样本：初始化统计量，返回 0（无历史参考）
             self.mean = x
             self.var = 1.0
-        else:
-            delta = x - self.mean
-            self.mean = self.momentum * self.mean + (1 - self.momentum) * x
-            self.var = self.momentum * self.var + (1 - self.momentum) * delta ** 2
+            return 0.0
         
-        std = np.sqrt(self.var)
-        # 添加安全下限，防止方差过小时导致除零或梯度爆炸
-        if std < 1e-6:
-            std = 1e-6
-        return (x - self.mean) / std
+        # 用旧统计量归一化当前值
+        std = np.sqrt(self.var) + 1e-8
+        normalized = (x - self.mean) / std
+        
+        # 更新统计量（Welford 在线算法的 EMA 变体）
+        delta_old = x - self.mean
+        self.mean = self.momentum * self.mean + (1 - self.momentum) * x
+        delta_new = x - self.mean
+        self.var = self.momentum * self.var + (1 - self.momentum) * delta_old * delta_new
+        
+        # 防止方差变为负数或过小
+        self.var = max(self.var, 1e-6)
+        
+        return normalized
 
 
 class Env:
@@ -41,9 +53,9 @@ class Env:
         self._time_step: int = 0
         
         # 动态归一化器：跨 episode 积累统计量，平衡各奖励分量的量级
+        # 注：JFI 使用固定映射，不需要动态归一化
         self._latency_normalizer = RunningNormalizer()
         self._energy_normalizer = RunningNormalizer()
-        self._jfi_normalizer = RunningNormalizer()
         self._rate_normalizer = RunningNormalizer()
 
     @property
@@ -428,15 +440,15 @@ class Env:
         if sc_metrics.size > 0 and np.sum(sc_metrics**2) > 0:
             jfi = (np.sum(sc_metrics) ** 2) / (sc_metrics.size * np.sum(sc_metrics**2))
 
-        # 先取 log 再动态归一化，使各分量量级一致
+        # 动态归一化：latency/energy/rate 取 log 压缩量级
         log_latency = np.log(total_latency + config.EPSILON)
         log_energy = np.log(total_energy + config.EPSILON)
-        log_jfi = np.log(jfi + config.EPSILON)
         log_rate = np.log(total_rate + config.EPSILON)
         
         r_latency: float = config.ALPHA_1 * self._latency_normalizer.normalize(log_latency)
         r_energy: float = config.ALPHA_2 * self._energy_normalizer.normalize(log_energy)
-        r_fairness: float = config.ALPHA_3 * self._jfi_normalizer.normalize(log_jfi)
+        # JFI 使用固定映射：以 0.6 为中心，线性区间 [0.2, 1.0] 映射到 [-2, +2]
+        r_fairness: float = config.ALPHA_3 * np.clip((jfi - 0.6) * 5.0, -2.0, 2.0)
         r_rate: float = config.ALPHA_RATE * self._rate_normalizer.normalize(log_rate)
         
         # 奖励 = 正向指标 - 负向指标
