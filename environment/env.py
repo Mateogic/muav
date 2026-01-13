@@ -12,7 +12,7 @@ class RunningNormalizer:
     这避免了当前样本影响自身归一化结果的问题。
     """
     
-    def __init__(self, momentum: float = 0.99) -> None:
+    def __init__(self, momentum: float = 0.96) -> None:
         self.momentum = momentum
         self.mean = 0.0
         self.var = 1.0
