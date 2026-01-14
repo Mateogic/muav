@@ -451,8 +451,11 @@ class UAV:
         - 通信能耗：发送功率 × 发送时间 + 接收功率 × 接收时间
         """
         # 1. 飞行能耗（移动 + 悬停，占满整个时隙）
-        time_moving = self._dist_moved / config.UAV_SPEED
-        time_hovering = config.TIME_SLOT_DURATION - time_moving
+        # 注：碰撞消解/边界裁剪可能导致实际位移略超出 v*tau，造成 time_hovering 出现极小负数。
+        # 这里对时间进行夹紧以保证能耗数值稳定。
+        time_moving = self._dist_moved / (config.UAV_SPEED + config.EPSILON)
+        time_moving = float(np.clip(time_moving, 0.0, config.TIME_SLOT_DURATION))
+        time_hovering = float(np.clip(config.TIME_SLOT_DURATION - time_moving, 0.0, config.TIME_SLOT_DURATION))
         fly_energy = config.POWER_MOVE * time_moving + config.POWER_HOVER * time_hovering
         
         # 2. 通信能耗（分别计算发送和接收，每时隙最多 1 秒）

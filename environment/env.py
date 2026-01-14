@@ -398,12 +398,11 @@ class Env:
         """
         from environment import comm_model as comms
         
-        # 预计算每个UAV的波束方向和关联UE数量
-        uav_info: list[tuple[np.ndarray, tuple[float, float], int]] = []
+        # 预计算每个UAV的波束方向
+        uav_info: list[tuple[np.ndarray, tuple[float, float]]] = []
         for uav in self._uavs:
             beam_dir = uav.get_final_beam_direction()
-            num_ues = len(uav.current_covered_ues)
-            uav_info.append((uav.pos, beam_dir, num_ues))
+            uav_info.append((uav.pos, beam_dir))
         
         # 为每个被服务的UE计算干扰
         for serving_uav_idx, uav in enumerate(self._uavs):
@@ -411,13 +410,17 @@ class Env:
                 total_interference: float = 0.0
                 
                 # 累加来自所有其他UAV的干扰
-                for interferer_idx, (interferer_pos, interferer_beam, interferer_num_ues) in enumerate(uav_info):
+                for interferer_idx, (interferer_pos, interferer_beam) in enumerate(uav_info):
                     if interferer_idx == serving_uav_idx:
                         continue  # 跳过服务UAV本身
                     
-                    # 计算该干扰UAV对此UE的干扰功率
+                    # 无关联UE的UAV不发射，不产生干扰
+                    if len(self._uavs[interferer_idx].current_covered_ues) == 0:
+                        continue
+                    
+                    # 计算该干扰UAV对此UE的全频带干扰功率（保守估计）
                     interference = comms.calculate_interference_power(
-                        interferer_pos, ue.pos, interferer_beam, interferer_num_ues
+                        interferer_pos, ue.pos, interferer_beam
                     )
                     total_interference += interference
                 

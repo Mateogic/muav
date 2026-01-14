@@ -268,32 +268,29 @@ def calculate_uav_mbs_downlink_rate(channel_gain: float) -> float:
 
 
 def calculate_interference_power(interfering_uav_pos: np.ndarray, ue_pos: np.ndarray,
-                                  interferer_beam_direction: tuple[float, float],
-                                  interferer_num_ues: int) -> float:
-    """计算单个干扰UAV对UE造成的干扰功率。
+                                  interferer_beam_direction: tuple[float, float]) -> float:
+    """计算单个干扰UAV对UE造成的全频带干扰功率（保守估计）。
     
-    干扰功率 = (干扰UAV的发射功率/其关联UE数) × 信道增益
+    采用保守估计模型：假设干扰UAV的发射功率均匀分布在整个频带上，
+    受干扰UE接收到干扰UAV的全部发射功率。这是同频复用场景下的标准做法。
+    
+    注：calculate_ue_uav_rate 中的 SINR 计算会隐式处理子载波分割，
+    即 SINR = (P×G)/(σ²+I)，其中 I 为全频带干扰功率。
     
     Args:
         interfering_uav_pos: 干扰UAV的位置
         ue_pos: 受干扰UE的位置
         interferer_beam_direction: 干扰UAV的波束方向
-        interferer_num_ues: 干扰UAV关联的UE数量（用于确定其发射功率分配）
     
     Returns:
-        干扰功率（线性值）
+        全频带干扰功率（线性值）
     """
-    if interferer_num_ues == 0:
-        return 0.0  # 干扰UAV没有关联UE时不发射
-    
     # 计算干扰链路的信道增益（考虑波束方向）
     interference_channel_gain = calculate_channel_gain(
         ue_pos, interfering_uav_pos, interferer_beam_direction
     )
     
-    # 干扰UAV的功率按OFDMA分配给其关联的UE
-    # 对于受干扰UE，它接收到的是干扰UAV的全部发射功率（因为不在OFDMA子载波分配中）
-    # 保守估计：使用干扰UAV的总发射功率
+    # 全频带干扰功率 = 干扰UAV总发射功率 × 信道增益
     interference_power = config.TRANSMIT_POWER * interference_channel_gain
     
     return interference_power

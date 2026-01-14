@@ -19,9 +19,10 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
     max_time_steps: int = num_episodes * config.STEPS_PER_EPISODE
     num_updates: int = max_time_steps // config.PPO_ROLLOUT_LENGTH
     assert num_updates > 0, "num_updates is 0, please modify settings."
-    save_freq: int = num_episodes // 10
-    if num_episodes < 1000:
-        save_freq = 100
+    # 保存频率基于 num_updates（而非 num_episodes），确保语义一致
+    save_freq: int = max(1, num_updates // 10)
+    if num_updates < 1000:
+        save_freq = min(100, num_updates)
     print(f"Total updates to be performed: {num_updates}")
     print(f"Each update has {config.PPO_ROLLOUT_LENGTH} steps.")
     print(f"Updates for {config.PPO_EPOCHS} epochs with batch size {config.PPO_BATCH_SIZE}.")
@@ -86,7 +87,7 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
             logger.log_metrics(update, rollout_log, config.LOG_FREQ, elapsed_time, "update")
         if update % 100 == 0:
             generate_plots(f"{logger.log_dir}/log_data_{logger.timestamp}.json", f"train_plots/{config.MODEL}/", "train", logger.timestamp)
-        if update % save_freq == 0 and update < num_episodes:
+        if update % save_freq == 0 and update < num_updates:
             save_models(model, update, "update", logger.timestamp)
 
     save_models(model, -1, "update", logger.timestamp, final=True)

@@ -31,7 +31,7 @@ def test_model(env: Env, model: MARLModel, logger: Logger, num_episodes: int) ->
                 plot_snapshot(env, episode, step, logger.log_dir, "episode", logger.timestamp)
 
             actions: np.ndarray = model.select_actions(obs, exploration=False)
-            next_obs, rewards, (total_latency, total_energy, jfi, total_rate) = env.step(actions)
+            next_obs, rewards, (total_latency, total_energy, jfi, total_rate, step_collisions, step_boundaries) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
             done: bool = step >= config.STEPS_PER_EPISODE
             obs = next_obs
@@ -41,12 +41,9 @@ def test_model(env: Env, model: MARLModel, logger: Logger, num_episodes: int) ->
             episode_energy += total_energy
             episode_fairness = jfi
             episode_rate += total_rate
-            
-            for uav in env.uavs:
-                if uav.collision_violation:
-                    episode_collisions += 1
-                if uav.boundary_violation:
-                    episode_boundaries += 1
+
+            episode_collisions += step_collisions
+            episode_boundaries += step_boundaries
             
             if done:
                 break
