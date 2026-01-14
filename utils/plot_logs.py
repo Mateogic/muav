@@ -294,6 +294,15 @@ def generate_plots(
         os.path.join(output_dir, f"{output_file_prefix}_latency_energy_{timestamp}.png"),
         smoothing=smoothing
     )
+
+    # 绘制对比图：Rate + Fairness
+    plot_metric_comparison(
+        x_data, metrics_data["rate"], metrics_data["fairness"],
+        x_label, "System Throughput (bps)", "Fairness Index",
+        "Throughput-Fairness Trade-off",
+        os.path.join(output_dir, f"{output_file_prefix}_rate_fairness_{timestamp}.png"),
+        smoothing=smoothing
+    )
     
     print(f"✅ Academic-style plots saved to {output_dir}\n")
 
