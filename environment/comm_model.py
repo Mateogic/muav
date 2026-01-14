@@ -62,7 +62,8 @@ def _calculate_los_probability(pos1: np.ndarray, pos2: np.ndarray) -> float:
     if min_height >= config.UE_AERIAL_MIN_ALT:
         # 两端都在空中（≥50m），视为空对空链路
         # 仰角越大（更垂直），LoS 概率越高
-        p_los = 0.9 + 0.1 * (elevation_angle / 90.0)
+        # P_LoS ∈ [0.8, 1.0]，比地对空链路更保守
+        p_los = 0.8 + 0.2 * (elevation_angle / 90.0)
         return np.clip(p_los, 0.0, 1.0)
     
     # 有一端接近地面：使用原 LoS 模型
@@ -302,13 +303,17 @@ def calculate_uav_uav_rate(channel_gain: float, num_collaborating_uavs: int = 1)
     采用频分复用(FDM)：当一个UAV被多个邻居选为协作者时，带宽和功率都需要平分。
     这符合总功率限制模型：UAV 的总发射功率固定，FDM 时每条链路分得 1/N 的功率。
     
+    FDM 噪声缩放：由于每条链路使用独立的子频带 B/N，噪声功率也相应缩放为 σ²/N。
+    因此 SNR = (P/N × G) / (σ²/N) = (P × G) / σ²，与协作者数量无关。
+    
     Args:
         channel_gain: 信道增益
         num_collaborating_uavs: 需要服务的协作UAV数量（被多少个UAV选为协作者）
     """
     assert num_collaborating_uavs >= 1
-    # FDM: 带宽和功率都平分给各链路
+    # FDM: 带宽和功率都平分给各链路，噪声也相应缩放
     bandwidth_per_link: float = config.BANDWIDTH_INTER / num_collaborating_uavs
-    power_per_link: float = config.TRANSMIT_POWER / num_collaborating_uavs
-    snr: float = (power_per_link * channel_gain) / config.AWGN
+    # FDM 子频带噪声功率 = 总噪声功率 / N（噪声功率与带宽成正比）
+    # SNR = (P/N × G) / (σ²/N) = (P × G) / σ²
+    snr: float = (config.TRANSMIT_POWER * channel_gain) / config.AWGN
     return bandwidth_per_link * np.log2(1 + snr)
