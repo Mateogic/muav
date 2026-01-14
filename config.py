@@ -117,12 +117,12 @@ ALPHA_3: float = 1.2  # weightage for fairness/JFI (reward)
 ALPHA_RATE: float = 1.0  # weightage for system throughput (reward)
 REWARD_SCALING_FACTOR: float = 0.12  # scaling factor for rewards (归一化后保持原量级)
 
-# UE state: pos(3) + request(3) + direction_angles(2) for absolute beam control
-UE_STATE_DIM: int = 3 + 3 + 2 if BEAM_CONTROL_ENABLED else 3 + 3
+# UE state: pos(3) + file_id(1) + cache_hit(1) = 5
+UE_STATE_DIM: int = 5
 # Neighbor state: pos(3) + immediate_help(1) + complementarity(1) = 5
-NEIGHBOR_STATE_DIM: int = 3 + 2
+NEIGHBOR_STATE_DIM: int = 5
 OBS_DIM_SINGLE: int = 3 + NUM_FILES + (MAX_UAV_NEIGHBORS * NEIGHBOR_STATE_DIM) + (MAX_ASSOCIATED_UES * UE_STATE_DIM)
-# own state: pos (3) + cache (NUM_FILES) + Neighbors: pos (3) + compressed_cache (2) + UEs: pos (3) + request (3) [+ direction angles (2)]
+# own state: pos (3) + cache (NUM_FILES) + Neighbors: pos (3) + cache_features (2) + UEs: pos (3) + file_id (1) + cache_hit (1)
 
 ACTION_DIM: int = 5 if BEAM_CONTROL_ENABLED else 3  # [dx, dy, dz] 或 [dx, dy, dz, beam_theta, beam_phi]
 STATE_DIM: int = NUM_UAVS * OBS_DIM_SINGLE

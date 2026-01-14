@@ -173,12 +173,16 @@ class Env:
         """Construct local observation vector for each UAV agent.
         
         Observation structure per UAV:
-        - Own state: position (3) + cache (NUM_FILES)
-        - Neighbors: (position (3) + cache (NUM_FILES)) × MAX_UAV_NEIGHBORS
-        - UEs: (position (3) + request_info (3) [+ direction_angles (2)]) × MAX_ASSOCIATED_UES
+                - Own state: normalized position (3) + cache bitmap (NUM_FILES)
+                - Neighbors (up to MAX_UAV_NEIGHBORS):
+                    - relative position (3), normalized by UAV_SENSING_RANGE
+                    - cache features (2): [immediate_help, complementarity]
+                - Associated UEs (up to MAX_ASSOCIATED_UES):
+                    - relative position (3), normalized by UAV_COVERAGE_RADIUS
+                    - normalized requested file id (1)
+                    - cache hit flag for requested file at this UAV (1)
         
-        When BEAM_CONTROL_ENABLED, UE states include spherical direction angles (theta, phi)
-        to help the agent learn the mapping from observation to beam direction actions.
+                The final observation is a flat 1D vector formed by concatenating these parts.
         """
         all_obs: list[np.ndarray] = []
         
@@ -230,36 +234,18 @@ class Env:
                 neighbor_states[i, :] = np.concatenate([relative_pos, neighbor_features])
 
             # Part 3: State of associated UEs
+            # UE 特征: 相对位置(3) + 归一化文件ID(1) + 缓存命中(1) = 5 维
             ue_states: np.ndarray = np.zeros((config.MAX_ASSOCIATED_UES, config.UE_STATE_DIM))
             ues: list[UE] = sorted(uav.current_covered_ues, key=lambda u: float(np.linalg.norm(uav.pos - u.pos)))[: config.MAX_ASSOCIATED_UES]
             for i, ue in enumerate(ues):
-                # Relative 3D position normalized by coverage radius (球形覆盖范围内)
-                raw_delta: np.ndarray = ue.pos - uav.pos
-                delta_pos: np.ndarray = raw_delta / config.UAV_COVERAGE_RADIUS
-                req_type, _, req_id = ue.current_request
-                norm_id: float = float(req_id) / float(config.NUM_FILES)
-                file_size: float = float(config.FILE_SIZES[req_id])
-                max_file_size: float = float(np.max(config.FILE_SIZES))
-                norm_size: float = file_size / max_file_size
-                request_info: np.ndarray = np.array([req_type, norm_size, norm_id], dtype=np.float32)
-                
-                if config.BEAM_CONTROL_ENABLED:
-                    # Calculate spherical direction angles for beam control guidance
-                    # These angles directly correspond to the action output for absolute beam control
-                    # Action mapping: theta = (action + 1) / 2 * 180, so action = theta/90 - 1
-                    # Observation should output the same normalized value as the desired action
-                    dist: float = float(np.linalg.norm(raw_delta)) + config.EPSILON
-                    # theta: 0° = zenith (z+), 180° = nadir (z-)
-                    # arccos(z/dist) gives angle from z+ axis: z>0 → small angle, z<0 → large angle
-                    theta_rad: float = np.arccos(np.clip(raw_delta[2] / dist, -1.0, 1.0))
-                    phi_rad: float = np.arctan2(raw_delta[1], raw_delta[0])  # -pi to pi
-                    # Normalize to match action space: action = theta/90 - 1, so theta_norm ∈ [-1, 1]
-                    theta_norm: float = (theta_rad / np.pi) * 2.0 - 1.0  # [0, pi] -> [-1, 1]
-                    phi_norm: float = phi_rad / np.pi  # [-pi, pi] -> [-1, 1]
-                    direction_angles: np.ndarray = np.array([theta_norm, phi_norm], dtype=np.float32)
-                    ue_states[i, :] = np.concatenate([delta_pos, request_info, direction_angles])
-                else:
-                    ue_states[i, :] = np.concatenate([delta_pos, request_info])
+                # 相对位置（归一化到覆盖半径）
+                delta_pos: np.ndarray = (ue.pos - uav.pos) / config.UAV_COVERAGE_RADIUS
+                # 请求文件信息
+                _, _, req_id = ue.current_request
+                norm_file_id: float = req_id / config.NUM_FILES
+                cache_hit: float = 1.0 if uav.cache[req_id] else 0.0
+                # 组装特征
+                ue_states[i, :] = np.array([delta_pos[0], delta_pos[1], delta_pos[2], norm_file_id, cache_hit], dtype=np.float32)
 
             # Part 4: Combine all parts into a single, flat observation vector
             obs: np.ndarray = np.concatenate([own_state, neighbor_states.flatten(), ue_states.flatten()])
