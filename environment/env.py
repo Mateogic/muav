@@ -171,84 +171,94 @@ class Env:
 
     def _get_obs(self) -> list[np.ndarray]:
         """Construct local observation vector for each UAV agent.
-        
-        Observation structure per UAV:
-                - Own state: normalized position (3) + cache bitmap (NUM_FILES)
-                - Neighbors (up to MAX_UAV_NEIGHBORS):
-                    - relative position (3), normalized by UAV_SENSING_RANGE
-                    - cache features (2): [immediate_help, complementarity]
-                - Associated UEs (up to MAX_ASSOCIATED_UES):
-                    - relative position (3), normalized by UAV_COVERAGE_RADIUS
-                    - normalized requested file id (1)
-                    - cache hit flag for requested file at this UAV (1)
-        
-                The final observation is a flat 1D vector formed by concatenating these parts.
+
+        新观测结构（支持注意力机制）：
+        - Own state: normalized position (3) + cache bitmap (NUM_FILES)
+        - Neighbors (MAX_UAV_NEIGHBORS): features (25) + count (1)
+        - Associated UEs (MAX_ASSOCIATED_UES): features (5) + count (1)
+
+        关键改进：不再截断 UE 列表，包含所有关联的 UE，通过 count 字段生成 mask
         """
         all_obs: list[np.ndarray] = []
-        
+
         # Normalization constants for 3D positions
-        # 使用 UE 最大高度作为 z 归一化常量（因为 UE 可以比 UAV 更高）
         pos_norm = np.array([config.AREA_WIDTH, config.AREA_HEIGHT, config.UE_MAX_ALT])
-        
+
         for uav in self._uavs:
             # Part 1: Own state (position and cache status)
             own_pos: np.ndarray = uav.pos / pos_norm
             own_cache: np.ndarray = uav.cache.astype(np.float32)
             own_state: np.ndarray = np.concatenate([own_pos, own_cache])
 
-            # Part 2: Neighbors state (positions and cache status)
-            # Compressed neighbor features: 3 (pos) + 2 (cache stats) = 5 dims
-            neighbor_states: np.ndarray = np.zeros((config.MAX_UAV_NEIGHBORS, 3 + 2))
-            neighbors: list[UAV] = sorted(uav.neighbors, key=lambda n: float(np.linalg.norm(uav.pos - n.pos)))[: config.MAX_UAV_NEIGHBORS]
-            
-            # Pre-calculate current requested files by served UEs for "Immediate Reward" feature
+            # Part 2: Neighbors state
+            neighbor_states: np.ndarray = np.zeros((config.MAX_UAV_NEIGHBORS, config.NEIGHBOR_STATE_DIM))
+            neighbors: list[UAV] = sorted(uav.neighbors, key=lambda n: float(np.linalg.norm(uav.pos - n.pos)))[:config.MAX_UAV_NEIGHBORS]
+
+            # Pre-calculate current requested files
             my_requested_files = set()
             for ue in uav.current_covered_ues:
                 req_type, _, req_id = ue.current_request
-                if req_type == 1: # Only consider content requests
+                if req_type == 1:
                     my_requested_files.add(req_id)
 
             for i, neighbor in enumerate(neighbors):
-                # Relative 3D position normalized by sensing range
                 relative_pos: np.ndarray = (neighbor.pos - uav.pos) / config.UAV_SENSING_RANGE
-                
-                # Feature 1: Immediate Help Capability (Immediate Reward)
-                # Does neighbor have ANY file I currently need?
-                # 1.0 if neighbor has at least one file I need, 0.0 otherwise
+                # 原始 cache bitmap（让注意力机制学习）
+                neighbor_cache: np.ndarray = neighbor.cache.astype(np.float32)
+                # 预处理特征（编码领域知识）
                 immediate_help = 0.0
                 for file_id in my_requested_files:
                     if neighbor.cache[file_id]:
                         immediate_help = 1.0
                         break
-                
-                # Feature 2: Cache Similarity (Long-term Potential)
-                # Jaccard Similarity: Intersection / Union
-                # We use 1 - Similarity to represent "Complementarity" or "Difference"
-                # If we are very different (Similarity low), Complementarity is high (1.0)
                 intersection = np.sum(np.logical_and(uav.cache, neighbor.cache))
                 union = np.sum(np.logical_or(uav.cache, neighbor.cache))
                 similarity = intersection / (union + config.EPSILON)
                 complementarity = 1.0 - similarity
-                
-                neighbor_features = np.array([immediate_help, complementarity], dtype=np.float32)
-                neighbor_states[i, :] = np.concatenate([relative_pos, neighbor_features])
+                # 混合特征: pos(3) + cache(NUM_FILES) + immediate_help(1) + complementarity(1)
+                neighbor_states[i, :] = np.concatenate([
+                    relative_pos,
+                    neighbor_cache,
+                    np.array([immediate_help, complementarity], dtype=np.float32)
+                ])
 
-            # Part 3: State of associated UEs
-            # UE 特征: 相对位置(3) + 归一化文件ID(1) + 缓存命中(1) = 5 维
+            # 邻居数量（用于生成 mask）
+            neighbor_count = np.array([len(neighbors)], dtype=np.float32)
+
+            # Part 3: State of ALL associated UEs (不再截断！)
             ue_states: np.ndarray = np.zeros((config.MAX_ASSOCIATED_UES, config.UE_STATE_DIM))
-            ues: list[UE] = sorted(uav.current_covered_ues, key=lambda u: float(np.linalg.norm(uav.pos - u.pos)))[: config.MAX_ASSOCIATED_UES]
-            for i, ue in enumerate(ues):
-                # 相对位置（归一化到覆盖半径）
+            # 按距离排序所有关联的 UE
+            all_ues: list[UE] = sorted(uav.current_covered_ues, key=lambda u: float(np.linalg.norm(uav.pos - u.pos)))
+            actual_ue_count = min(len(all_ues), config.MAX_ASSOCIATED_UES)
+
+            for i in range(actual_ue_count):
+                ue = all_ues[i]
                 delta_pos: np.ndarray = (ue.pos - uav.pos) / config.UAV_COVERAGE_RADIUS
-                # 请求文件信息
                 _, _, req_id = ue.current_request
                 norm_file_id: float = req_id / config.NUM_FILES
                 cache_hit: float = 1.0 if uav.cache[req_id] else 0.0
-                # 组装特征
                 ue_states[i, :] = np.array([delta_pos[0], delta_pos[1], delta_pos[2], norm_file_id, cache_hit], dtype=np.float32)
 
-            # Part 4: Combine all parts into a single, flat observation vector
-            obs: np.ndarray = np.concatenate([own_state, neighbor_states.flatten(), ue_states.flatten()])
+            # UE 数量（用于生成 mask，仅注意力模式需要）
+            ue_count = np.array([actual_ue_count], dtype=np.float32)
+
+            # Part 4: Combine all parts
+            # 注意力模式: [own_state, neighbor_states, neighbor_count, ue_states, ue_count]
+            # MLP模式: [own_state, neighbor_states, ue_states]
+            if config.USE_ATTENTION:
+                obs: np.ndarray = np.concatenate([
+                    own_state,
+                    neighbor_states.flatten(),
+                    neighbor_count,
+                    ue_states.flatten(),
+                    ue_count
+                ])
+            else:
+                obs = np.concatenate([
+                    own_state,
+                    neighbor_states.flatten(),
+                    ue_states.flatten()
+                ])
             all_obs.append(obs)
 
         return all_obs

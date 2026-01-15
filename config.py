@@ -49,10 +49,19 @@ COLLISION_PENALTY: float = 1.0  # penalty per collision (缩放后约0.30，占�
 BOUNDARY_PENALTY: float = 1.0  # penalty for going out of bounds (缩放后约0.30)
 NON_SERVED_LATENCY_PENALTY: float = 60.0  # penalty in latency for non-served requests
 # IMPORTANT : Reconfigurable, should try for various values including : NUM_UAVS - 1 and NUM_UES
-MAX_UAV_NEIGHBORS: int = min(3, NUM_UAVS - 1)
-MAX_ASSOCIATED_UES: int = min(30, NUM_UES // NUM_UAVS + 10)
+MAX_UAV_NEIGHBORS: int = min(4, NUM_UAVS - 1)
+# 注意力机制：设置合理的 UE 观测上限（通过注意力聚合处理可变长度）
+MAX_ASSOCIATED_UES: int = 50  # 观测的最大 UE 数量（覆盖>99.9%情况）
 assert MAX_UAV_NEIGHBORS >= 1 and MAX_UAV_NEIGHBORS <= NUM_UAVS - 1
 assert MAX_ASSOCIATED_UES >= 1 and MAX_ASSOCIATED_UES <= NUM_UES
+
+# Attention Mechanism Parameters (注意力机制参数)
+USE_ATTENTION: bool = True  # 是否使用注意力机制处理可变长度 UE 列表
+ATTENTION_EMBED_DIM: int = 128  # UE 注意力的 embedding 维度 (heads=2, head_dim=64)
+ATTENTION_UAV_EMBED_DIM: int = 64  # UAV 状态的 embedding 维度
+ATTENTION_NEIGHBOR_DIM: int = 64  # Neighbor 注意力输出维度 (heads=2, head_dim=32)
+ATTENTION_NUM_HEADS: int = 2  # 多头注意力的头数
+ATTENTION_DROPOUT: float = 0.1  # 注意力 dropout 率
 
 POWER_MOVE: float = 60.0  # P_move in Watts
 POWER_HOVER: float = 40.0  # P_hover in Watts
@@ -77,7 +86,7 @@ RECEIVE_POWER: float = 0.1  # P_rx in Watts (UAV 接收功率)
 UE_TRANSMIT_POWER: float = 0.1  # P_ue in Watts (UE 发射功率，用于上行链路)
 AWGN: float = 1e-13  # sigma^2
 BANDWIDTH_INTER: int = 30 * 10**6  # B^inter in Hz
-BANDWIDTH_EDGE: int = 20 * 10**6  # B^edge in Hz
+BANDWIDTH_EDGE: int = 30 * 10**6  # B^edge in Hz
 BANDWIDTH_BACKHAUL: int = 40 * 10**6  # B^backhaul in Hz
 
 # Air-to-Ground Channel Model Parameters (ITU-R / 3GPP based)
@@ -119,10 +128,19 @@ REWARD_SCALING_FACTOR: float = 0.12  # scaling factor for rewards (归一化后�
 
 # UE state: pos(3) + file_id(1) + cache_hit(1) = 5
 UE_STATE_DIM: int = 5
-# Neighbor state: pos(3) + immediate_help(1) + complementarity(1) = 5
-NEIGHBOR_STATE_DIM: int = 5
-OBS_DIM_SINGLE: int = 3 + NUM_FILES + (MAX_UAV_NEIGHBORS * NEIGHBOR_STATE_DIM) + (MAX_ASSOCIATED_UES * UE_STATE_DIM)
-# own state: pos (3) + cache (NUM_FILES) + Neighbors: pos (3) + cache_features (2) + UEs: pos (3) + file_id (1) + cache_hit (1)
+# Neighbor state: pos(3) + cache(NUM_FILES) + immediate_help(1) + complementarity(1)
+# 混合方案：保留原始cache bitmap + 预处理特征，让注意力机制学习更丰富的表示
+NEIGHBOR_STATE_DIM: int = 3 + NUM_FILES + 2  # 25 dims
+# 观测维度计算（根据是否使用注意力机制）
+# - 基础部分: uav_state + neighbors + ues
+# - 注意力模式额外: neighbor_count(1) + ue_count(1) 用于生成 mask
+# OBS_DIM: 3+20+4*25+1+50*5+1 = 375
+# 编码器输出维度：UAV(64) + UE_attn(128) + Neighbor_attn(64) = 256 ≈ OBS_DIM(375)
+_OBS_BASE_DIM: int = (3 + NUM_FILES +
+                      MAX_UAV_NEIGHBORS * NEIGHBOR_STATE_DIM +
+                      MAX_ASSOCIATED_UES * UE_STATE_DIM)
+OBS_DIM_SINGLE: int = _OBS_BASE_DIM + 2 if USE_ATTENTION else _OBS_BASE_DIM
+
 
 ACTION_DIM: int = 5 if BEAM_CONTROL_ENABLED else 3  # [dx, dy, dz] 或 [dx, dy, dz, beam_theta, beam_phi]
 STATE_DIM: int = NUM_UAVS * OBS_DIM_SINGLE

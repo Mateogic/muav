@@ -324,10 +324,10 @@ $$
 
 ##### 2.3.3.2 波束方向单位向量
 
-给定波束方向 $(\theta_0, \phi_0)$，其单位向量为：
+给定波束方向 $(\theta_0, \phi_0)$，其单位向量（在三个坐标轴的投影）为：
 
 $$
-\vec{v}_{\text{beam}} = \begin{pmatrix} \sin\theta_0 \cos\phi_0 \\ \sin\theta_0 \sin\phi_0 \\ \cos\theta_0 \end{pmatrix}
+\vec{v}_{\text{beam}} = \begin{pmatrix} \sin\theta_0 \cos\phi_0 \\ \sin\theta_0 \sin\phi_0 \\ \cos\theta_0 \end{pmatrix} = \begin{pmatrix} v_x \\ v_y \\ v_z \end{pmatrix}
 $$
 
 ##### 2.3.3.3 默认波束指向计算
@@ -350,19 +350,23 @@ $$
 
 **Step 1：计算目标方向单位向量**
 
+- $p_X$ 为 $X$ 的位置向量，$\vec{v}_{\text{target}}$ 为从无人机指向目标点的单位向量
+
 $$
 \vec{v}_{\text{target}} = \frac{\vec{p}_{\text{target}} - \vec{p}_{\text{UAV}}}{\|\vec{p}_{\text{target}} - \vec{p}_{\text{UAV}}\|}
 $$
 
 **Step 2：计算角度偏差（大圆距离）**
 
-使用向量点积计算真实的 3D 角度偏差，避免极点附近的数值问题：
+$\vec{v}_{\text{beam}}$ 为实际波束指向的单位向量，使用向量点积计算真实的 3D 角度偏差，避免极点附近的数值问题：
+
+- 其中 $\vec{v}_{\text{target}}\cdot \vec{v}_{\text{beam}}=\cos\Delta\psi$
 
 $$
 \Delta\psi = \arccos(\vec{v}_{\text{beam}} \cdot \vec{v}_{\text{target}})
 $$
 
-**Step 3：计算增益衰减**
+**Step 3：计算增益衰减(dB)**
 
 采用 3GPP TR 38.901 的天线模型：
 
@@ -461,7 +465,7 @@ $$
 \text{SINR}_k = \frac{P_k \cdot G_k}{\sigma^2 / N + I / N} = \frac{P_{\text{tx}} \cdot G_k}{\sigma^2 + I}
 $$
 
-> **关键洞察**：由于功率、噪声和干扰都按 $1/N$ 缩放，OFDMA 子载波的 SINR 等于使用全功率时的全频带 SINR。
+> 由于功率、噪声和干扰都按 $1/N$ 缩放，OFDMA 子载波的 SINR 等于使用全功率时的全频带 SINR。
 
 **下行速率公式：**
 

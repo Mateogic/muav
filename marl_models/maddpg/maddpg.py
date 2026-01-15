@@ -7,6 +7,10 @@ import torch.nn.functional as F
 import numpy as np
 import os
 
+# 条件导入注意力网络
+if config.USE_ATTENTION:
+    from marl_models.maddpg.agents import ActorNetworkWithAttention, CriticNetworkWithAttention
+
 
 class MADDPG(MARLModel):
     def __init__(self, model_name: str, num_agents: int, obs_dim: int, action_dim: int, device: str) -> None:
@@ -14,11 +18,19 @@ class MADDPG(MARLModel):
         self.total_obs_dim: int = num_agents * obs_dim
         self.total_action_dim: int = num_agents * action_dim
 
-        # Create networks for each agent
-        self.actors: list[ActorNetwork] = [ActorNetwork(obs_dim, action_dim).to(device) for _ in range(num_agents)]
-        self.critics: list[CriticNetwork] = [CriticNetwork(self.total_obs_dim, self.total_action_dim).to(device) for _ in range(num_agents)]
-        self.target_actors: list[ActorNetwork] = [ActorNetwork(obs_dim, action_dim).to(device) for _ in range(num_agents)]
-        self.target_critics: list[CriticNetwork] = [CriticNetwork(self.total_obs_dim, self.total_action_dim).to(device) for _ in range(num_agents)]
+        # Create networks for each agent (根据配置选择网络类型)
+        if config.USE_ATTENTION:
+            # 使用注意力网络
+            self.actors = [ActorNetworkWithAttention(obs_dim, action_dim).to(device) for _ in range(num_agents)]
+            self.critics = [CriticNetworkWithAttention(num_agents, obs_dim, action_dim).to(device) for _ in range(num_agents)]
+            self.target_actors = [ActorNetworkWithAttention(obs_dim, action_dim).to(device) for _ in range(num_agents)]
+            self.target_critics = [CriticNetworkWithAttention(num_agents, obs_dim, action_dim).to(device) for _ in range(num_agents)]
+        else:
+            # 使用原始 MLP 网络
+            self.actors = [ActorNetwork(obs_dim, action_dim).to(device) for _ in range(num_agents)]
+            self.critics = [CriticNetwork(self.total_obs_dim, self.total_action_dim).to(device) for _ in range(num_agents)]
+            self.target_actors = [ActorNetwork(obs_dim, action_dim).to(device) for _ in range(num_agents)]
+            self.target_critics = [CriticNetwork(self.total_obs_dim, self.total_action_dim).to(device) for _ in range(num_agents)]
         self._init_target_networks()
 
         # Create optimizers
