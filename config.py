@@ -45,8 +45,8 @@ FAIRNESS_WINDOW_SIZE: int = 100  # 公平性计算的滑动窗口大小（最近
 
 # Collision Avoidance and Penalties
 COLLISION_AVOIDANCE_ITERATIONS: int = 20  # number of iterations to resolve collisions
-COLLISION_PENALTY: float = 1.0  # penalty per collision (缩放后约0.30，占奖励范围~46%)
-BOUNDARY_PENALTY: float = 1.0  # penalty for going out of bounds (缩放后约0.30)
+COLLISION_PENALTY: float = 1.0
+BOUNDARY_PENALTY: float = 1.0
 NON_SERVED_LATENCY_PENALTY: float = 60.0  # penalty in latency for non-served requests
 # IMPORTANT : Reconfigurable, should try for various values including : NUM_UAVS - 1 and NUM_UES
 MAX_UAV_NEIGHBORS: int = min(4, NUM_UAVS - 1)
@@ -156,15 +156,15 @@ LOG_STD_MIN: float = -20  # minimum log standard deviation for stochastic polici
 EPSILON: float = 1e-9  # small value to prevent division by zero
 
 # Off-policy algorithm hyperparameters
-REPLAY_BUFFER_SIZE: int = 5* 10**5  # B，大概包含前500个episode的数据
+REPLAY_BUFFER_SIZE: int = 6 * 10**5  # B，大概包含前500个episode的数据
 REPLAY_BATCH_SIZE: int = 1024  # minibatch size (increased from 64 for better GPU utilization)
-INITIAL_RANDOM_STEPS: int = 50000  # steps of random actions for exploration
+INITIAL_RANDOM_STEPS: int = 40000  # steps of random actions for exploration
 LEARN_FREQ: int = 5  # steps to learn after
 
 # Gaussian Noise Parameters (for MADDPG and MATD3)
 INITIAL_NOISE_SCALE: float = 0.2
 MIN_NOISE_SCALE: float = 0.05
-NOISE_DECAY_RATE: float = 0.9998
+NOISE_DECAY_RATE: float = 0.998
 BEAM_NOISE_RATIO: float = 0.5  # 波束动作噪声相对于位移动作噪声的比例
 
 # MATD3 Specific Hyperparameters

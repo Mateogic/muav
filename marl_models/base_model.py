@@ -36,12 +36,15 @@ class MARLModel(ABC):
         pass
 
     @abstractmethod
-    def update(self, batch: ExperienceBatch) -> None:
+    def update(self, batch: ExperienceBatch) -> dict:
         """
         Performs a learning update on the model's networks using a batch of experiences.
 
         Args:
             batch (ExperienceBatch): A dictionary (for on-policy) or a tuple (for off-policy).
+        
+        Returns:
+            dict: Training statistics (loss, grad norms, etc.). Empty dict if not applicable.
         """
         pass
 

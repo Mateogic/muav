@@ -52,7 +52,7 @@ class MATD3(MARLModel):
 
         return np.array(actions)
 
-    def update(self, batch: ExperienceBatch) -> None:
+    def update(self, batch: ExperienceBatch) -> dict:
         assert isinstance(batch, tuple) and len(batch) == 5, "MATD3 expects OffPolicyExperienceBatch (tuple of 5 elements)"
         self.update_counter += 1
         obs_batch, actions_batch, rewards_batch, next_obs_batch, dones_batch = batch
@@ -66,6 +66,12 @@ class MATD3(MARLModel):
         obs_flat: torch.Tensor = obs_tensor.reshape(batch_size, -1)
         next_obs_flat: torch.Tensor = next_obs_tensor.reshape(batch_size, -1)
         actions_flat: torch.Tensor = actions_tensor.reshape(batch_size, -1)
+
+        total_actor_loss: float = 0.0
+        total_critic_loss: float = 0.0
+        total_actor_grad_norm: float = 0.0
+        total_critic_grad_norm: float = 0.0
+        q_values: list[float] = []
 
         for agent_idx in range(self.num_agents):
             # Update Critic
@@ -101,10 +107,14 @@ class MATD3(MARLModel):
             self.critic_2_optimizers[agent_idx].zero_grad(set_to_none=True)
             combined_critic_loss: torch.Tensor = critic_1_loss + critic_2_loss
             combined_critic_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.critics_1[agent_idx].parameters(), config.MAX_GRAD_NORM)
-            torch.nn.utils.clip_grad_norm_(self.critics_2[agent_idx].parameters(), config.MAX_GRAD_NORM)
+            c1_grad_norm = torch.nn.utils.clip_grad_norm_(self.critics_1[agent_idx].parameters(), config.MAX_GRAD_NORM)
+            c2_grad_norm = torch.nn.utils.clip_grad_norm_(self.critics_2[agent_idx].parameters(), config.MAX_GRAD_NORM)
             self.critic_1_optimizers[agent_idx].step()
             self.critic_2_optimizers[agent_idx].step()
+
+            total_critic_loss += combined_critic_loss.item()
+            total_critic_grad_norm += float(max(c1_grad_norm, c2_grad_norm))
+            q_values.extend(current_q1.detach().cpu().numpy().flatten().tolist())
 
         # Delayed Policy and Target Network Updates
         if self.update_counter % config.POLICY_UPDATE_FREQ == 0:
@@ -124,13 +134,28 @@ class MATD3(MARLModel):
                 actor_loss: torch.Tensor = -self.critics_1[agent_idx](obs_flat, pred_actions_flat).mean()
                 self.actor_optimizers[agent_idx].zero_grad(set_to_none=True)
                 actor_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.actors[agent_idx].parameters(), config.MAX_GRAD_NORM)
+                a_grad_norm = torch.nn.utils.clip_grad_norm_(self.actors[agent_idx].parameters(), config.MAX_GRAD_NORM)
                 self.actor_optimizers[agent_idx].step()
+
+                total_actor_loss += actor_loss.item()
+                total_actor_grad_norm += float(a_grad_norm)
 
                 # Soft update all target networks
                 soft_update(self.target_actors[agent_idx], self.actors[agent_idx], config.UPDATE_FACTOR)
                 soft_update(self.target_critics_1[agent_idx], self.critics_1[agent_idx], config.UPDATE_FACTOR)
                 soft_update(self.target_critics_2[agent_idx], self.critics_2[agent_idx], config.UPDATE_FACTOR)
+
+        # Use None for metrics not computed in this update (avoids diluting averages)
+        stats = {
+            "critic_loss": total_critic_loss / self.num_agents,
+            "critic_grad_norm": total_critic_grad_norm / self.num_agents,
+            "q_value_mean": float(np.mean(q_values)) if q_values else 0.0,
+            "noise_scale": self.noise[0].scale,
+            "actor_loss": total_actor_loss / self.num_agents if self.update_counter % config.POLICY_UPDATE_FREQ == 0 else None,
+            "actor_grad_norm": total_actor_grad_norm / self.num_agents if self.update_counter % config.POLICY_UPDATE_FREQ == 0 else None,
+        }
+        
+        return stats
 
     def _init_target_networks(self) -> None:
         for actor, target_actor in zip(self.actors, self.target_actors):

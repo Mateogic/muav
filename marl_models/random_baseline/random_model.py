@@ -9,8 +9,8 @@ class RandomModel(MARLModel):
     def select_actions(self, observations: list[np.ndarray], exploration: bool = True) -> np.ndarray:
         return np.random.uniform(-1.0, 1.0, (self.num_agents, self.action_dim))
 
-    def update(self, batch: ExperienceBatch) -> None:
-        pass
+    def update(self, batch: ExperienceBatch) -> dict:
+        return {}  # Random baseline doesn't learn, return empty dict for interface consistency
 
     def reset(self) -> None:
         pass

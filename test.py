@@ -31,7 +31,7 @@ def test_model(env: Env, model: MARLModel, logger: Logger, num_episodes: int) ->
                 plot_snapshot(env, episode, step, logger.log_dir, "episode", logger.timestamp)
 
             actions: np.ndarray = model.select_actions(obs, exploration=False)
-            next_obs, rewards, (total_latency, total_energy, jfi, total_rate, step_collisions, step_boundaries) = env.step(actions)
+            next_obs, rewards, (total_latency, total_energy, jfi, total_rate, normalizer_stats, step_collisions, step_boundaries) = env.step(actions)
             # update_trajectories(env)  # tracking code, comment if not needed
             done: bool = step >= config.STEPS_PER_EPISODE
             obs = next_obs
@@ -39,7 +39,7 @@ def test_model(env: Env, model: MARLModel, logger: Logger, num_episodes: int) ->
             episode_reward += np.sum(rewards)
             episode_latency += total_latency
             episode_energy += total_energy
-            episode_fairness = jfi
+            episode_fairness += jfi
             episode_rate += total_rate
 
             episode_collisions += step_collisions
@@ -48,7 +48,16 @@ def test_model(env: Env, model: MARLModel, logger: Logger, num_episodes: int) ->
             if done:
                 break
 
-        episode_log.append(episode_reward, episode_latency, episode_energy, episode_fairness, episode_rate, episode_collisions, episode_boundaries)
+        # Normalize metrics by number of steps for interpretability
+        episode_log.append(
+            episode_reward / config.STEPS_PER_EPISODE, 
+            episode_latency / config.STEPS_PER_EPISODE, 
+            episode_energy / config.STEPS_PER_EPISODE, 
+            episode_fairness / config.STEPS_PER_EPISODE, 
+            episode_rate / config.STEPS_PER_EPISODE, 
+            episode_collisions, 
+            episode_boundaries
+        )
         if episode % config.TEST_LOG_FREQ == 0:
             elapsed_time: float = time.time() - start_time
             logger.log_metrics(episode, episode_log, config.TEST_LOG_FREQ, elapsed_time, "episode")

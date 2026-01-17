@@ -422,8 +422,8 @@ class Env:
                 
                 ue.interference_power = total_interference
 
-    def _get_rewards_and_metrics(self) -> tuple[list[float], tuple[float, float, float, float]]:
-        """Returns the reward and other metrics (latency, energy, jfi, total_rate).
+    def _get_rewards_and_metrics(self) -> tuple[list[float], tuple[float, float, float, float, dict]]:
+        """Returns the reward and other metrics (latency, energy, jfi, total_rate, normalizer_stats).
         
         使用动态归一化平衡各奖励分量：
         1. 先对原始指标取 log（压缩量级差异）
@@ -444,6 +444,15 @@ class Env:
         log_energy = np.log(total_energy + config.EPSILON)
         log_rate = np.log(total_rate + config.EPSILON)
         
+        # 缓存归一化前的统计量（用于诊断）
+        latency_mean_used = self._latency_normalizer.mean
+        latency_var_used = self._latency_normalizer.var
+        energy_mean_used = self._energy_normalizer.mean
+        energy_var_used = self._energy_normalizer.var
+        rate_mean_used = self._rate_normalizer.mean
+        rate_var_used = self._rate_normalizer.var
+        
+        # 执行归一化（会更新统计量）
         r_latency: float = config.ALPHA_1 * self._latency_normalizer.normalize(log_latency)
         r_energy: float = config.ALPHA_2 * self._energy_normalizer.normalize(log_energy)
         # JFI 使用固定映射：以 0.6 为中心，线性区间 [0.2, 1.0] 映射到 [-2, +2]
@@ -459,4 +468,36 @@ class Env:
             if uav.boundary_violation:
                 rewards[uav.id] -= config.BOUNDARY_PENALTY
         rewards = [r * config.REWARD_SCALING_FACTOR for r in rewards]
-        return rewards, (total_latency, total_energy, jfi, total_rate)
+        
+        # Collect normalizer states and reward components for debugging
+        normalizer_stats = {
+            # 原始指标（step级别，支持平均）
+            "total_latency": total_latency,
+            "total_energy": total_energy,
+            "total_rate": total_rate,
+            # 归一化时使用的统计量（*_used 后缀）
+            "latency_norm_mean_used": latency_mean_used,
+            "latency_norm_var_used": latency_var_used,
+            "energy_norm_mean_used": energy_mean_used,
+            "energy_norm_var_used": energy_var_used,
+            "rate_norm_mean_used": rate_mean_used,
+            "rate_norm_var_used": rate_var_used,
+            # 归一化后的当前统计量
+            "latency_norm_mean": self._latency_normalizer.mean,
+            "latency_norm_var": self._latency_normalizer.var,
+            "energy_norm_mean": self._energy_normalizer.mean,
+            "energy_norm_var": self._energy_normalizer.var,
+            "rate_norm_mean": self._rate_normalizer.mean,
+            "rate_norm_var": self._rate_normalizer.var,
+            # Individual reward components (critical for multi-objective tuning)
+            "r_latency": r_latency,
+            "r_energy": r_energy,
+            "r_fairness": r_fairness,
+            "r_rate": r_rate,
+            # Log-transformed values (before normalization, for normalizer diagnosis)
+            "log_latency": log_latency,
+            "log_energy": log_energy,
+            "log_rate": log_rate,
+        }
+        
+        return rewards, (total_latency, total_energy, jfi, total_rate, normalizer_stats)

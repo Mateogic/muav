@@ -54,7 +54,7 @@ class MASAC(MARLModel):
                 actions.append(action.squeeze(0).cpu().numpy())
         return np.array(actions)
 
-    def update(self, batch: ExperienceBatch) -> None:
+    def update(self, batch: ExperienceBatch) -> dict:
         assert isinstance(batch, tuple) and len(batch) == 5, "MASAC expects OffPolicyExperienceBatch (tuple of 5 elements)"
         obs_batch, actions_batch, rewards_batch, next_obs_batch, dones_batch = batch
         obs_tensor = torch.as_tensor(obs_batch, dtype=torch.float32, device=self.device)
@@ -68,8 +68,17 @@ class MASAC(MARLModel):
         next_obs_flat: torch.Tensor = next_obs_tensor.reshape(batch_size, -1)
         actions_flat: torch.Tensor = actions_tensor.reshape(batch_size, -1)
 
+        total_actor_loss: float = 0.0
+        total_critic_loss: float = 0.0
+        total_alpha_loss: float = 0.0
+        total_actor_grad_norm: float = 0.0
+        total_critic_grad_norm: float = 0.0
+        alphas: list[float] = []
+        q_values: list[float] = []
+
         for agent_idx in range(self.num_agents):
             alpha: torch.Tensor = self.log_alphas[agent_idx].exp()
+            alphas.append(alpha.item())
 
             # Update Critic
             with torch.no_grad():
@@ -108,14 +117,16 @@ class MASAC(MARLModel):
             self.critic_2_optimizers[agent_idx].zero_grad(set_to_none=True)
             combined_critic_loss: torch.Tensor = critic_1_loss + critic_2_loss
             combined_critic_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.critics_1[agent_idx].parameters(), config.MAX_GRAD_NORM)
-            torch.nn.utils.clip_grad_norm_(self.critics_2[agent_idx].parameters(), config.MAX_GRAD_NORM)
+            c1_grad = torch.nn.utils.clip_grad_norm_(self.critics_1[agent_idx].parameters(), config.MAX_GRAD_NORM)
+            c2_grad = torch.nn.utils.clip_grad_norm_(self.critics_2[agent_idx].parameters(), config.MAX_GRAD_NORM)
             self.critic_1_optimizers[agent_idx].step()
             self.critic_2_optimizers[agent_idx].step()
 
+            total_critic_loss += combined_critic_loss.item()
+            total_critic_grad_norm += float(max(c1_grad, c2_grad))
+            q_values.extend(current_q1.detach().cpu().numpy().flatten().tolist())
+
             # Update Actor and Alpha
-            # Sample new actions for all agents to reduce bias and get more accurate Q-values
-            # This is the standard approach in multi-agent SAC for better convergence
             pred_actions_list: list[torch.Tensor] = []
             agent_log_prob: torch.Tensor = None
             for i in range(self.num_agents):
@@ -137,8 +148,11 @@ class MASAC(MARLModel):
             actor_loss: torch.Tensor = (agent_log_prob * alpha.detach() - min_q_pred).mean()
             self.actor_optimizers[agent_idx].zero_grad(set_to_none=True)
             actor_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.actors[agent_idx].parameters(), config.MAX_GRAD_NORM)
+            a_grad = torch.nn.utils.clip_grad_norm_(self.actors[agent_idx].parameters(), config.MAX_GRAD_NORM)
             self.actor_optimizers[agent_idx].step()
+
+            total_actor_loss += actor_loss.item()
+            total_actor_grad_norm += float(a_grad)
 
             # Update alpha (temperature)
             alpha_loss: torch.Tensor = -(self.log_alphas[agent_idx] * (agent_log_prob + self.target_entropy).detach()).mean()
@@ -146,9 +160,21 @@ class MASAC(MARLModel):
             alpha_loss.backward()
             self.alpha_optimizers[agent_idx].step()
 
+            total_alpha_loss += alpha_loss.item()
+
             # Soft update target networks
             soft_update(self.target_critics_1[agent_idx], self.critics_1[agent_idx], config.UPDATE_FACTOR)
             soft_update(self.target_critics_2[agent_idx], self.critics_2[agent_idx], config.UPDATE_FACTOR)
+        
+        return {
+            "actor_loss": total_actor_loss / self.num_agents,
+            "critic_loss": total_critic_loss / self.num_agents,
+            "alpha_loss": total_alpha_loss / self.num_agents,
+            "alpha_mean": float(np.mean(alphas)),
+            "actor_grad_norm": total_actor_grad_norm / self.num_agents,
+            "critic_grad_norm": total_critic_grad_norm / self.num_agents,
+            "q_value_mean": float(np.mean(q_values)),
+        }
 
     def _init_target_networks(self) -> None:
         for critic1, target_critic1 in zip(self.critics_1, self.target_critics_1):

@@ -13,6 +13,32 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 from utils.plot_logs import ACADEMIC_STYLE, COLORS, smooth_curve
 
+def load_log_data(file_path: str) -> list[dict]:
+    """支持读取标准 JSON 格式或新版 JSONL 格式的日志文件。"""
+    data = []
+    with open(file_path, "r") as f:
+        # 尝试读取第一行判断格式
+        first_line = f.readline().strip()
+        if not first_line:
+            return []
+        
+        f.seek(0)
+        if first_line.startswith("["):
+            # 标准 JSON 数组格式
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                pass
+        else:
+            # JSONL 格式
+            for line in f:
+                if line.strip():
+                    try:
+                        data.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+    return data
+
 def plot_algorithm_comparison(
     log_files: list[str],
     labels: list[str],
@@ -64,14 +90,13 @@ def plot_algorithm_comparison(
             continue
             
         try:
-            with open(log_file, "r") as f:
-                data = json.load(f)
-                file_data_cache[log_file] = data  # 缓存数据
-                
+            data = load_log_data(log_file)
             if not data:
-                print(f"⚠️ 警告: 文件为空，跳过: {log_file}")
+                print(f"⚠️ 警告: 文件为空或格式错误，跳过: {log_file}")
                 detected_x_labels.append(None)
                 continue
+            
+            file_data_cache[log_file] = data  # 缓存数据
             
             # 检测 x 轴类型
             if "update" in data[0]:

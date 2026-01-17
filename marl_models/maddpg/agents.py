@@ -57,7 +57,7 @@ class CriticNetwork(nn.Module):
         
         self.activation = nn.LeakyReLU(0.01)
 
-    def forward(self, joint_obs: torch.Tensor, joint_action: torch.Tensor) -> torch.Tensor:
+    def forward(self, joint_obs: torch.Tensor, joint_action: torch.Tensor, _joint_encoded: torch.Tensor | None = None) -> torch.Tensor:
         x: torch.Tensor = torch.cat([joint_obs, joint_action], dim=1)
         
         # First layer (no residual due to dimension change)
@@ -106,12 +106,13 @@ class ActorNetworkWithAttention(nn.Module):
 class CriticNetworkWithAttention(nn.Module):
     """使用注意力机制的 Critic 网络"""
 
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int) -> None:
+    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, shared_encoders: nn.ModuleList) -> None:
         super().__init__()
         self.num_agents = num_agents
+        self.obs_dim = obs_dim
 
-        # 每个 agent 独立的注意力编码器
-        self.encoders = nn.ModuleList([AttentionEncoder() for _ in range(num_agents)])
+        # 使用外部传入的共享编码器（所有Critic共享，避免参数爆炸）
+        self.encoders = shared_encoders
         encoder_output_dim = self.encoders[0].output_dim  # 256
 
         # 总输入维度：所有 agent 的编码 + 所有 agent 的动作
@@ -129,24 +130,29 @@ class CriticNetworkWithAttention(nn.Module):
 
         self.activation = nn.LeakyReLU(0.01)
 
-    def forward(self, joint_obs: torch.Tensor, joint_action: torch.Tensor) -> torch.Tensor:
+    def encode_observations(self, joint_obs: torch.Tensor) -> torch.Tensor:
+        """Pre-compute encodings for all agents (optimization for MADDPG update loop)."""
+        batch_size = joint_obs.shape[0]
+        encodings = []
+        for i in range(self.num_agents):
+            agent_obs = joint_obs[:, i * self.obs_dim:(i + 1) * self.obs_dim]
+            encoded = self.encoders[i](agent_obs)
+            encodings.append(encoded)
+        return torch.cat(encodings, dim=-1)
+
+    def forward(self, joint_obs: torch.Tensor, joint_action: torch.Tensor, 
+                joint_encoded: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
             joint_obs: [batch, num_agents * obs_dim] 所有 agent 的观测
             joint_action: [batch, num_agents * action_dim] 所有 agent 的动作
+            joint_encoded: [batch, num_agents * encoder_dim] 预计算的编码（可选）
         """
-        batch_size = joint_obs.shape[0]
-        obs_dim = joint_obs.shape[1] // self.num_agents
+        # Use pre-computed encodings if provided, otherwise compute them
+        if joint_encoded is None:
+            joint_encoded = self.encode_observations(joint_obs)
 
-        # 分离每个 agent 的观测并编码
-        encodings = []
-        for i in range(self.num_agents):
-            agent_obs = joint_obs[:, i * obs_dim:(i + 1) * obs_dim]
-            encoded = self.encoders[i](agent_obs)
-            encodings.append(encoded)
-
-        # 拼接所有编码和动作
-        joint_encoded = torch.cat(encodings, dim=-1)
+        # 拼接编码和动作
         x = torch.cat([joint_encoded, joint_action], dim=-1)
 
         # MLP 处理（带残差连接）
@@ -159,3 +165,10 @@ class CriticNetworkWithAttention(nn.Module):
         x = x + residual
 
         return self.out(x)
+    
+    def mlp_parameters(self):
+        """返回仅属于 MLP 的参数（不包括共享编码器）"""
+        return list(self.fc1.parameters()) + list(self.ln1.parameters()) + \
+               list(self.fc2.parameters()) + list(self.ln2.parameters()) + \
+               list(self.fc3.parameters()) + list(self.ln3.parameters()) + \
+               list(self.out.parameters())

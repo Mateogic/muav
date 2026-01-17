@@ -53,7 +53,7 @@ class MAPPO(MARLModel):
 
         return raw_actions.cpu().numpy(), log_probs.cpu().numpy(), values.cpu().numpy()
 
-    def update(self, batch: ExperienceBatch) -> None:
+    def update(self, batch: ExperienceBatch) -> dict:
         assert isinstance(batch, dict), "MAPPO expects OnPolicyExperienceBatch (dict)"
         obs_batch: torch.Tensor = batch["obs"]
         actions_batch: torch.Tensor = batch["actions"]
@@ -92,8 +92,8 @@ class MAPPO(MARLModel):
         actor_loss: torch.Tensor = -torch.min(surr1, surr2).mean()
 
         # Adding entropy bonus for exploration
-        entropy_loss: torch.Tensor = dist.entropy().mean()
-        actor_loss -= config.PPO_ENTROPY_COEF * entropy_loss
+        entropy: torch.Tensor = dist.entropy().mean()
+        actor_loss -= config.PPO_ENTROPY_COEF * entropy
 
         # Combined update: zero gradients once, compute both losses, then step
         # Using set_to_none=True is faster than setting to zero
@@ -104,10 +104,20 @@ class MAPPO(MARLModel):
         total_loss: torch.Tensor = actor_loss + critic_loss
         total_loss.backward()
         
-        torch.nn.utils.clip_grad_norm_(self.actors.parameters(), config.MAX_GRAD_NORM)
-        torch.nn.utils.clip_grad_norm_(self.critics.parameters(), config.MAX_GRAD_NORM)
+        actor_grad_norm = torch.nn.utils.clip_grad_norm_(self.actors.parameters(), config.MAX_GRAD_NORM)
+        critic_grad_norm = torch.nn.utils.clip_grad_norm_(self.critics.parameters(), config.MAX_GRAD_NORM)
         self.actor_optimizer.step()
         self.critic_optimizer.step()
+
+        return {
+            "actor_loss": actor_loss.item(),
+            "critic_loss": critic_loss.item(),
+            "entropy": entropy.item(),
+            "ratio_mean": ratio.mean().item(),
+            "actor_grad_norm": float(actor_grad_norm),
+            "critic_grad_norm": float(critic_grad_norm),
+            "value_mean": values.mean().item(),
+        }
 
     def reset(self) -> None:
         pass  # Nothing to reset

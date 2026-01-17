@@ -233,8 +233,32 @@ def generate_plots(
         timestamp: 时间戳
         smoothing: EMA平滑权重 (0-1, 越大越平滑)
     """
-    with open(log_file, "r") as file:
-        log_data: list[dict] = json.load(file)
+    log_data: list[dict] = []
+    try:
+        with open(log_file, "r", encoding="utf-8") as file:
+            # Peek to determine if it's a JSON array or JSON Lines
+            content_start = file.read(1)
+            file.seek(0)
+            
+            if content_start == '[':
+                # Old style: Single JSON array
+                log_data = json.load(file)
+            else:
+                # New style: JSON Lines (one JSON object per line)
+                for line in file:
+                    line = line.strip()
+                    if line:
+                        try:
+                            log_data.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue  # Skip malformed lines
+    except Exception as e:
+        print(f"❌ Error reading {log_file}: {e}")
+    
+    if not log_data:
+        print(f"❌ No valid data found in {log_file}")
+        return
+    
     os.makedirs(output_dir, exist_ok=True)
 
     # 确定x轴类型

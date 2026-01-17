@@ -22,6 +22,17 @@ class Log:
         self.rates.append(rate)
         self.collisions.append(collisions)
         self.boundaries.append(boundaries)
+    
+    def keep_recent(self, keep_size: int) -> None:
+        """Keep only the most recent entries to prevent memory growth."""
+        if len(self.rewards) > keep_size:
+            self.rewards = self.rewards[-keep_size:]
+            self.latencies = self.latencies[-keep_size:]
+            self.energies = self.energies[-keep_size:]
+            self.fairness_scores = self.fairness_scores[-keep_size:]
+            self.rates = self.rates[-keep_size:]
+            self.collisions = self.collisions[-keep_size:]
+            self.boundaries = self.boundaries[-keep_size:]
 
 
 class Logger:
@@ -65,7 +76,7 @@ class Logger:
 
         print(f"✅ Configs loaded from {config_path}")
 
-    def log_metrics(self, progress_step: int, log: Log, log_freq: int, elapsed_time: float, name: str) -> None:
+    def log_metrics(self, progress_step: int, log: Log, log_freq: int, elapsed_time: float, name: str, training_stats: dict | None = None) -> None:
         rewards_slice: np.ndarray = np.array(log.rewards[-log_freq:])
         latencies_slice: np.ndarray = np.array(log.latencies[-log_freq:])
         energies_slice: np.ndarray = np.array(log.energies[-log_freq:])
@@ -75,8 +86,11 @@ class Logger:
         boundaries_slice: np.ndarray = np.array(log.boundaries[-log_freq:])
 
         reward_avg: float = float(np.mean(rewards_slice))
+        reward_std: float = float(np.std(rewards_slice))
         latency_avg: float = float(np.mean(latencies_slice))
+        latency_std: float = float(np.std(latencies_slice))
         energy_avg: float = float(np.mean(energies_slice))
+        energy_std: float = float(np.std(energies_slice))
         fairness_avg: float = float(np.mean(fairness_slice))
         rate_avg: float = float(np.mean(rates_slice))
         collisions_sum: int = int(np.sum(collisions_slice))
@@ -84,9 +98,9 @@ class Logger:
 
         log_msg: str = (
             f"🔄 {name.title()} {progress_step} | "
-            f"Reward: {reward_avg:.3f} | "
-            f"Lat: {latency_avg:.1f} | "
-            f"Eng: {energy_avg:.1f} | "
+            f"Reward: {reward_avg:.3f}±{reward_std:.3f} | "
+            f"Lat: {latency_avg:.1f}±{latency_std:.1f} | "
+            f"Eng: {energy_avg:.1f}±{energy_std:.1f} | "
             f"JFI: {fairness_avg:.3f} | "
             f"Rate: {rate_avg:.1f} | "
             f"Col: {collisions_sum} | "
@@ -100,23 +114,23 @@ class Logger:
         data_entry: dict = {
             name.lower(): progress_step,
             "reward": reward_avg,
+            "reward_std": reward_std,
             "latency": latency_avg,
+            "latency_std": latency_std,
             "energy": energy_avg,
+            "energy_std": energy_std,
             "fairness": fairness_avg,
             "rate": rate_avg,
             "collisions": collisions_sum,
             "boundaries": boundaries_sum,
             "time": elapsed_time
         }
-        json_data: list[dict] = []
-
-        if os.path.exists(self.json_file_path):
-            with open(self.json_file_path, "r") as jf:
-                try:
-                    json_data = json.load(jf)
-                except json.JSONDecodeError:
-                    json_data = []
-
-        json_data.append(data_entry)
-        with open(self.json_file_path, "w") as f:
-            json.dump(json_data, f, indent=4)
+        
+        # Add training statistics if provided
+        if training_stats:
+            data_entry.update(training_stats)
+        
+        # Use append mode for O(1) write instead of O(N) read+write
+        # This prevents O(N²) complexity in long training runs
+        with open(self.json_file_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(data_entry) + "\n")
