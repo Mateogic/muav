@@ -69,7 +69,8 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
             obs = next_obs
             state = next_state
 
-            rollout_reward += np.sum(rewards)
+            # Use mean reward to make metrics independent of the number of UAVs
+            rollout_reward += np.mean(rewards)
             rollout_latency += total_latency
             rollout_energy += total_energy
             rollout_fairness += jfi
@@ -143,7 +144,7 @@ def train_on_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: in
     save_models(model, -1, "update", logger.timestamp, final=True, total_steps=total_steps)
 
 
-def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: int, total_step_count: int) -> None:
+def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: int, total_step_count: int) -> int:
     start_time: float = time.time()
     buffer: ReplayBuffer = ReplayBuffer(config.REPLAY_BUFFER_SIZE)
     save_freq: int = num_episodes // 10
@@ -211,7 +212,8 @@ def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: i
 
             obs = next_obs
 
-            episode_reward += np.sum(rewards)
+            # Use mean reward to make metrics independent of the number of UAVs
+            episode_reward += np.mean(rewards)
             episode_latency += total_latency
             episode_energy += total_energy
             episode_fairness += jfi
@@ -274,6 +276,7 @@ def train_off_policy(env: Env, model: MARLModel, logger: Logger, num_episodes: i
             save_models(model, episode, "episode", logger.timestamp, total_steps=total_step_count)
 
     save_models(model, -1, "episode", logger.timestamp, final=True, total_steps=total_step_count)
+    return total_step_count
 
 
 def train_random(env: Env, model: MARLModel, logger: Logger, num_episodes: int) -> None:
@@ -302,7 +305,8 @@ def train_random(env: Env, model: MARLModel, logger: Logger, num_episodes: int) 
             done: bool = step >= config.STEPS_PER_EPISODE
             obs = next_obs
 
-            episode_reward += np.sum(rewards)
+            # Use mean reward to make metrics independent of the number of UAVs
+            episode_reward += np.mean(rewards)
             episode_latency += total_latency
             episode_energy += total_energy
             episode_fairness += jfi

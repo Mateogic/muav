@@ -95,6 +95,11 @@ class Logger:
         rate_avg: float = float(np.mean(rates_slice))
         collisions_sum: int = int(np.sum(collisions_slice))
         boundaries_sum: int = int(np.sum(boundaries_slice))
+        
+        mbs_usage: str = ""
+        if training_stats and "mbs_users_count" in training_stats:
+            mbs_avg = training_stats["mbs_users_count"]
+            mbs_usage = f"MBS: {mbs_avg:.1f} | "
 
         log_msg: str = (
             f"🔄 {name.title()} {progress_step} | "
@@ -103,6 +108,7 @@ class Logger:
             f"Eng: {energy_avg:.1f}±{energy_std:.1f} | "
             f"JFI: {fairness_avg:.3f} | "
             f"Rate: {rate_avg:.1f} | "
+            f"{mbs_usage}"
             f"Col: {collisions_sum} | "
             f"Bnd: {boundaries_sum} | "
             f"Time: {elapsed_time:.2f}s\n"

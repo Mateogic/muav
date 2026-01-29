@@ -39,11 +39,23 @@ class UE:
             initial_z
         ])
         
-        # self.current_request: 一个元组，表示当前通信需求，格式为 (req_type, req_size, req_id)。req_type固定为1（内容请求）。
-        self.current_request: tuple[int, int, int] = (1, 0, 0)  # Request : (req_type=1, req_size, req_id)
-        # self.latency_current_request: 浮点数，表示当前请求的延迟，初始值为 0.0。
-        self.latency_current_request: float = 0.0  # Latency for the current request
-        # self.assigned: 布尔值，指示 UE 是否已分配给 UAV，初始值为 False。
+        # Request lifecycle
+        # current_request: (req_type=1, req_size, req_id)
+        self.current_request: tuple[int, int, int] = (1, 0, 0)
+        self.request_active: bool = False
+        self.request_start_step: int = 0
+
+        # Step-level flags (reset every environment step)
+        self.received_bits_this_step: float = 0.0
+        self.completed_this_step: bool = False
+        self.failed_this_step: bool = False
+        self.completed_requests_total: int = 0
+        self.failed_requests_total: int = 0
+
+        # Latency for current request (used for logging/metrics)
+        self.latency_current_request: float = 0.0
+
+        # Compatibility flag: whether UE is currently assigned to any UAV in this slot
         self.assigned: bool = False
 
         # Random Waypoint Model：随机游走模型变量（3D）
@@ -57,6 +69,37 @@ class UE:
         
         # Co-channel Interference：同频干扰
         self.interference_power: float = 0.0  # 来自其他UAV的同频干扰功率总和
+
+    def reset_step_flags(self) -> None:
+        """Reset per-step flags before a new environment step is simulated."""
+        self.received_bits_this_step = 0.0
+        self.completed_this_step = False
+        self.failed_this_step = False
+
+    def on_downlink_bits_delivered(self, bits: float) -> None:
+        """Called by the serving UAV when some downlink bits are actually delivered in this step."""
+        if bits > 0.0:
+            self.received_bits_this_step += bits
+
+    def on_request_completed(self, current_time_step: int) -> None:
+        """Mark current request as completed at the end of current step."""
+        if not self.request_active:
+            return
+        self.completed_this_step = True
+        self.request_active = False
+        self.completed_requests_total += 1
+        # Approximate end-to-end latency by integer slot time.
+        self.latency_current_request = (current_time_step - self.request_start_step + 1) * config.TIME_SLOT_DURATION
+
+    def on_request_failed(self, current_time_step: int) -> None:
+        """Mark current request as failed (timeout/drop) at the end of current step."""
+        if not self.request_active:
+            return
+        self.failed_this_step = True
+        self.request_active = False
+        self.failed_requests_total += 1
+        # Penalize failed request with a large latency.
+        self.latency_current_request = config.NON_SERVED_LATENCY_PENALTY
 
     def update_position(self) -> None:
         """Updates the UE's position for one time slot as per the 3D Random Waypoint model."""
@@ -75,24 +118,29 @@ class UE:
             move_vector = (direction_vec / distance_to_waypoint) * config.UE_MAX_DIST
             self.pos += move_vector
 
-    def generate_request(self) -> None:
-        """Generates a new content request (communication demand) for the current time slot."""
-        # All requests are content requests (req_type=1) - representing communication demands
+    def generate_request(self, next_time_step: int) -> None:
+        """Generates a new content request for the upcoming time slot.
+
+        Request persists across slots until completed/failed.
+        """
+        if self.request_active:
+            return
+
         req_type: int = 1
-
-        # Select content ID based on Zipf probabilities (popular content preference)
-        req_id: int = np.random.choice(UE.content_ids, p=UE.content_zipf_probabilities)
-
-        # req_size is not used for content requests (file size is determined by FILE_SIZES)
+        req_id: int = int(np.random.choice(UE.content_ids, p=UE.content_zipf_probabilities))
         req_size: int = 0
 
         self.current_request = (req_type, req_size, req_id)
+        self.request_active = True
+        self.request_start_step = next_time_step
         self.latency_current_request = 0.0
-        self.assigned = False
+
 
     def update_service_coverage(self, current_time_step_t: int) -> None:
-        """使用滑动窗口更新服务覆盖率，只考虑最近 N 步的表现。"""
-        success: bool = self.assigned and self.latency_current_request <= config.TIME_SLOT_DURATION
+        """使用滑动窗口更新服务覆盖率，判断本步是否成功获得服务。"""
+        # 修正：如果本步判定为失败（如超时或丢包），即使收到了比特也不计为成功。
+        # 配合 Env.step 中先执行超时判定，后执行此覆盖率更新。
+        success: bool = (self.received_bits_this_step >= config.SUCCESS_BIT_THRESHOLD) and not self.failed_this_step
         self._service_history.append(success)
         # 滑动窗口内的成功率（窗口未满时使用实际长度）
         self.service_coverage = sum(self._service_history) / len(self._service_history)

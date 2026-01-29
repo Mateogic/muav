@@ -23,7 +23,7 @@ class RunningNormalizer:
         self.count += 1
         
         if self.count == 1:
-            # 第一个样本：初始化统计量，返回 0（无历史参考）
+            # 第一个样本：初始化统计量，返回 0.0（无历史参考）
             self.mean = x
             self.var = 1.0
             return 0.0
@@ -58,6 +58,15 @@ class Env:
         self._energy_normalizer = RunningNormalizer()
         self._rate_normalizer = RunningNormalizer()
 
+        # B1 丢包建模与超时诊断统计（在步长的不同阶段累计，供日志使用）
+        self._pending_bits_dropped_last_boundary: float = 0.0
+        self._backlog_bits_dropped_last_boundary: float = 0.0
+        self._failed_requests_dropped_boundary: int = 0
+        
+        self._pending_bits_dropped_timeout: float = 0.0
+        self._backlog_bits_dropped_timeout: float = 0.0
+        self._failed_requests_dropped_timeout: int = 0
+
     @property
     def uavs(self) -> list[UAV]:
         return self._uavs
@@ -68,44 +77,71 @@ class Env:
 
     def reset(self) -> list[np.ndarray]:
         """Resets the environment to an initial state and returns the initial observations."""
-        self._ues = [UE(i) for i in range(config.NUM_UES)]
         self._uavs = [UAV(i) for i in range(config.NUM_UAVS)]
+        self._ues = [UE(i) for i in range(config.NUM_UES)]
         self._time_step = 0
+        
+        # 初始化物理拓扑 (coverage/associations)
+        self._associate_ues_to_uavs()
+        
         self._prepare_for_next_step()
+        self._update_topology_and_collaborators()
+        self._update_contention_and_rates()
         return self._get_obs()
 
-    def step(self, actions: np.ndarray) -> tuple[list[np.ndarray], list[float], tuple[float, float, float, float, int, int]]:
+    def step(self, actions: np.ndarray) -> tuple[list[np.ndarray], list[float], tuple[float, float, float, float, dict, int, int]]:
         """Execute one time step of the simulation."""
         self._time_step += 1
 
-        # 0. Apply beam control actions first (affects current slot's communication)
+        # Reset UE per-step flags (delivered bits / completion markers)
+        for ue in self._ues:
+            ue.reset_step_flags()
+
+        # 0. 立即执行移动并更新物理拓扑 (使 Action 直接影响产生的比特率和奖励)
+        self._apply_actions_to_env(actions)
+        for ue in self._ues:
+            ue.update_position()
+        
+        # 应用波束控制动作 (针对新位置调整)
         if config.BEAM_CONTROL_ENABLED:
             self._apply_beam_actions(actions)
 
-        # 1. Calculate co-channel interference AFTER beam actions are applied
-        # 确保干扰计算使用的波束方向与信号计算一致
+        # 刷新覆盖关系与 B1 强制丢包检测 (UE 移出/移入)
+        self._associate_ues_to_uavs()
+        self._check_and_drop_boundary_ues()
+
+        # 阶段 A: 更新网络拓扑与协作者选择 (基于移动后的新位置)
+        self._update_topology_and_collaborators()
+
+        # 1. 在新位置下计算信道干扰 (用于 UE 下行速率)
         self._calculate_ue_interference()
 
-        # 2. Process requests using current time slot state
-        # 先初始化所有 UAV 的 working_cache，避免竞态条件
-        # （协作 UAV 可能在请求处理时修改其他 UAV 的 _working_cache）
+        # 2. 处理请求 (新注入本时隙的任务量)
         for uav in self._uavs:
             uav.init_working_cache()
         for uav in self._uavs:
-            uav.process_requests()
+            uav.process_requests(self._time_step)
 
+        # 阶段 B: 根据包含新任务的总负载，更新 MBS 和 U2U 的物理速率 (修正时序断层)
+        self._update_contention_and_rates()
+
+        for uav in self._uavs:
+            uav.update_ema_and_cache(self._time_step)
+
+        # 3. 计算能耗与传输比特 (使用包含新任务的真实速率)
+        for uav in self._uavs:
+            uav.update_energy_consumption(self._uavs, self._time_step)
+
+        # 缓存落盘：确保本时隙完成传输的文件正式进入物理缓存
+        for uav in self._uavs:
+            uav.cache = uav._working_cache.copy()
+
+        # Enforce UE-side timeout FIRST (to ensure failed requests don't count as success in fairness)
+        self._handle_request_timeouts()
+
+        # Update UE fairness metric (after transmissions and timeout check)
         for ue in self._ues:
             ue.update_service_coverage(self._time_step)
-
-        for uav in self._uavs:
-            uav.update_ema_and_cache()
-
-        # 2. Execute UAV movement (updates _dist_moved)
-        self._apply_actions_to_env(actions)
-
-        # 3. Calculate energy (flight energy uses _dist_moved, comm energy uses this slot's time)
-        for uav in self._uavs:
-            uav.update_energy_consumption()
 
         rewards, metrics = self._get_rewards_and_metrics()
 
@@ -114,10 +150,7 @@ class Env:
                 uav.gdsf_cache_update()
 
         # 4. Prepare for next time slot
-        for ue in self._ues:
-            ue.update_position()
-
-        # Count violations before resetting logic checks
+        # Count violations
         step_collisions = sum(1 for uav in self._uavs if uav.collision_violation)
         step_boundaries = sum(1 for uav in self._uavs if uav.boundary_violation)
 
@@ -126,48 +159,200 @@ class Env:
 
         self._prepare_for_next_step()
         next_obs: list[np.ndarray] = self._get_obs()
+        
+        # 返回结构: obs, rewards, (latency, energy, jfi, rate, stats, collisions, boundaries)
         return next_obs, rewards, metrics + (step_collisions, step_boundaries)
+
+    def _check_and_drop_boundary_ues(self) -> None:
+        """B1 丢包建模：UE 离开覆盖范围即会话结束（在移动后立即生效）。"""
+        # 重置本时隙所有丢包统计
+        self._pending_bits_dropped_last_boundary = 0.0
+        self._backlog_bits_dropped_last_boundary = 0.0
+        self._failed_requests_dropped_boundary = 0
+        
+        self._pending_bits_dropped_timeout = 0.0
+        self._backlog_bits_dropped_timeout = 0.0
+        self._failed_requests_dropped_timeout = 0
+        
+        failed_ue_ids: set[int] = set()
+        for uav in self._uavs:
+            covered_ue_ids = {u.id for u in uav.current_covered_ues}
+            
+            # 搜集离开本 UAV 覆盖范围但仍有在途任务的 UE
+            ues_leaving = set()
+            for ue_id in uav._backlog_tx_ue_uav:
+                if ue_id not in covered_ue_ids: ues_leaving.add(ue_id)
+            for t in uav._mbs_rx_tasks:
+                if t["target_type"] == "UE" and t["ue_id"] not in covered_ue_ids:
+                    ues_leaving.add(t["ue_id"])
+                elif t["target_type"] == "COL":
+                    # 关键修复：协作任务中，检查 UE 是否离开“请求者” UAV 的覆盖范围，而非协作者
+                    req_uav = self._uavs[t["target_id"]]
+                    req_covered_ids = {u.id for u in req_uav.current_covered_ues}
+                    if t["ue_id"] not in req_covered_ids: ues_leaving.add(t["ue_id"])
+            for tasks in uav._u2u_rx_tasks.values():
+                for t in tasks:
+                    if t["target_type"] == "UE" and t["ue_id"] not in covered_ue_ids: ues_leaving.add(t["ue_id"])
+            for wait_list in uav._u2u_wait_tasks.values():
+                for _, ue_id in wait_list:
+                    if ue_id not in covered_ue_ids: ues_leaving.add(ue_id)
+
+            for uid in ues_leaving:
+                failed_ue_ids.add(uid)
+
+        # 统一清理全网流水线，确保每个失败的 UE 只处理一次（防止 Case 3 等导致重复计数）
+        for ue_id in failed_ue_ids:
+            self._drop_ue_pipeline_across_uavs(ue_id)
+
+        # 针对失败的请求进行状态更新
+        for ue_id in failed_ue_ids:
+            if 0 <= ue_id < len(self._ues) and self._ues[ue_id].request_active:
+                self._ues[ue_id].on_request_failed(self._time_step)
 
     def _prepare_for_next_step(self) -> None:
         """Prepare environment state for the next time step.
         
         This includes:
         1. Generate UE requests
-        2. Associate UEs to UAVs
-        3. Set UAV requested files and neighbors
-        4. Select collaborators
-        5. Count requesting UAVs for bandwidth allocation
-        6. Set communication rates
-        7. Set frequency counts for caching policy
+        
+        Note: Physical topology updates (RequestedFiles, Neighbors, Collaborators, Rates, FreqCounts) 
+        are handled in _update_physical_network_and_rates() after movement in step().
         """
-        # 1. Generate requests for all UEs
+        # 1. Generate (or keep) requests for the upcoming slot
         for ue in self._ues:
-            ue.generate_request()
-        
-        # 2. Associate UEs to UAVs based on coverage
-        self._associate_ues_to_uavs()
-        
-        # 3. Set requested files and neighbors for each UAV
+            ue.generate_request(self._time_step + 1)
+
+    def _update_topology_and_collaborators(self) -> None:
+        """更新拓扑结构和协作者选择 (基于当前位置)。"""
+        # 0. Set requested files for each UAV (Based on new associations)
         for uav in self._uavs:
             uav.set_current_requested_files()
+
+        # 1. Update Neighbors (Topology) based on new positions
+        for uav in self._uavs:
             uav.set_neighbors(self._uavs)
-        
-        # 4. Select collaborator for each UAV
+
+        # 2. Select Collaborators
         for uav in self._uavs:
             uav.select_collaborator()
-        
-        # 5. Count how many UAVs selected each UAV as collaborator (for FDM bandwidth allocation)
+
+    def _update_contention_and_rates(self) -> None:
+        """统计链路竞争状况并设定最终物理速率 (基于当前位置和所有活跃任务)。"""
+        # 3. Reset and Count Contention (U2U and MBS)
+        # Clear previous contention counters
         for uav in self._uavs:
+            uav._requesting_uav_ids.clear()
+            uav._num_mbs_users = 1 # Default
+
+        # Count U2U contention
+        for uav in self._uavs:
+            active_collab_ids = set()
             if uav.current_collaborator:
-                uav.current_collaborator._num_requesting_uavs += 1
-        
-        # 6. Set communication rates (must be after _num_requesting_uavs is counted)
+                active_collab_ids.add(uav.current_collaborator.id)
+            
+            # Add existing pipeline collaborators (backlog)
+            active_collab_ids.update(uav._backlog_tx_uav_uav_as_requester.keys())
+            active_collab_ids.update(uav._backlog_rx_uav_uav_as_requester.keys())
+            # 新增本时隙刚产生的协作比特背景负荷
+            active_collab_ids.update(uav._bits_tx_uav_uav_as_requester.keys())
+            active_collab_ids.update(uav._bits_rx_uav_uav_as_requester.keys())
+            
+            for collab_id in active_collab_ids:
+                if 0 <= collab_id < len(self._uavs):
+                    self._uavs[collab_id]._requesting_uav_ids.add(uav.id)
+
+        # Count MBS contention
+        mbs_users = set()
         for uav in self._uavs:
-            uav._set_rates()
+            # 这里的指标包括了在 process_requests 期间注入的新任务
+            if (uav._backlog_tx_uav_mbs > config.EPSILON or 
+                uav._backlog_rx_uav_mbs > config.EPSILON or 
+                uav._bits_tx_uav_mbs > config.EPSILON or 
+                uav._bits_rx_uav_mbs > config.EPSILON or
+                uav._mbs_rx_tasks):
+                mbs_users.add(uav.id)
         
-        # 7. Set frequency counts for GDSF caching policy
+        num_mbs_users = max(1, len(mbs_users))
+        for uav in self._uavs:
+            uav._num_mbs_users = num_mbs_users
+            
+        # 4. Set Rates using new topology and contention stats
+        for uav in self._uavs:
+            uav._set_rates(self._uavs)
+
+        # 5. Set frequency counts for GDSF caching policy (Must use new coverage/collaborators)
         for uav in self._uavs:
             uav.set_freq_counts()
+
+    def _drop_ue_pipeline_across_uavs(self, ue_id: int, reason: str = "boundary") -> None:
+        """从全网所有 UAV 的流水线中移除属于特定 UE 的在途传输任务。"""
+        if reason == "boundary":
+            self._failed_requests_dropped_boundary += 1
+        else:
+            self._failed_requests_dropped_timeout += 1
+
+        for uav in self._uavs:
+            # 1. 清理 MBS 接收队列
+            orig_mbs = uav._mbs_rx_tasks
+            uav._mbs_rx_tasks = [t for t in orig_mbs if t["ue_id"] != ue_id]
+            m_rem = sum(t["bits"] for t in orig_mbs if t["ue_id"] == ue_id)
+            uav._backlog_rx_uav_mbs = max(0.0, uav._backlog_rx_uav_mbs - m_rem)
+            
+            # 2. 清理 U2U 接收队列 (作为请求方)
+            for nid in list(uav._u2u_rx_tasks.keys()):
+                orig_u2u_rx = uav._u2u_rx_tasks[nid]
+                uav._u2u_rx_tasks[nid] = [t for t in orig_u2u_rx if t["ue_id"] != ue_id]
+                u_rem = sum(t["bits"] for t in orig_u2u_rx if t["ue_id"] == ue_id)
+                uav._backlog_rx_uav_uav_as_requester[nid] = max(0.0, uav._backlog_rx_uav_uav_as_requester.get(nid, 0.0) - u_rem)
+                m_rem += u_rem
+                
+            # 3. 清理 U2U 协作发送队列 (作为协作者)
+            for rid in list(uav._u2u_tx_tasks_as_collab.keys()):
+                orig_u2u_tx = uav._u2u_tx_tasks_as_collab[rid]
+                uav._u2u_tx_tasks_as_collab[rid] = [t for t in orig_u2u_tx if t["ue_id"] != ue_id]
+                t_rem = sum(t["bits"] for t in orig_u2u_tx if t["ue_id"] == ue_id)
+                uav._backlog_tx_uav_uav_as_collaborator[rid] = max(0.0, uav._backlog_tx_uav_uav_as_collaborator.get(rid, 0.0) - t_rem)
+                m_rem += t_rem
+
+            # 统计总丢弃比特
+            if reason == "boundary":
+                self._pending_bits_dropped_last_boundary += m_rem
+            else:
+                self._pending_bits_dropped_timeout += m_rem
+
+            # 4. 清理下行队列
+            b_rem = 0.0
+            if ue_id in uav._backlog_tx_ue_uav:
+                b_rem += uav._backlog_tx_ue_uav[ue_id]
+                del uav._backlog_tx_ue_uav[ue_id]
+            
+            if reason == "boundary":
+                self._backlog_bits_dropped_last_boundary += b_rem
+            else:
+                self._backlog_bits_dropped_timeout += b_rem
+
+            if ue_id in uav._dl_tasks:
+                del uav._dl_tasks[ue_id]
+            # (UE 上行积压通常不涉及流水线中转，简单清理即可)
+            if ue_id in uav._backlog_rx_ue_uav:
+                del uav._backlog_rx_ue_uav[ue_id]
+            
+            # 5. 清理等待协作队列 (Case 3)
+            # 严格流水线逻辑：仅清理元数据，比特计费由协作者侧的队列负责，避免双计
+            for nid in list(uav._u2u_wait_tasks.keys()):
+                wait_list = uav._u2u_wait_tasks[nid]
+                # 过滤并移除
+                uav._u2u_wait_tasks[nid] = [wt for wt in wait_list if wt[1] != ue_id]
+
+    def _handle_request_timeouts(self) -> None:
+        """UE-side timeout: if a request waits too long, fail it and clear any in-flight pipeline."""
+        for ue in self._ues:
+            if not ue.request_active:
+                continue
+            age_slots = max(0, self._time_step - ue.request_start_step + 1)
+            if age_slots >= config.UE_MAX_WAIT_TIME:
+                ue.on_request_failed(self._time_step)
+                self._drop_ue_pipeline_across_uavs(ue.id, reason="timeout")
 
     def _get_obs(self) -> list[np.ndarray]:
         """Construct local observation vector for each UAV agent.
@@ -384,43 +569,27 @@ class Env:
             ue.assigned = True
 
     def _calculate_ue_interference(self) -> None:
-        """Calculate co-channel interference for each UE from non-serving UAVs.
-        
-        对于每个被服务的UE，计算来自所有其他UAV的同频干扰功率总和。
-        干扰功率取决于：
-        1. 干扰UAV到UE的距离和信道增益
-        2. 干扰UAV的波束方向（3D beamforming）
-        3. 干扰UAV是否有关联UE（无关联则不发射）
-        """
+        """Calculate downlink co-channel interference for UEs from non-serving UAVs."""
         from environment import comm_model as comms
         
-        # 预计算每个UAV的波束方向
+        # 预计算每个 UAV 的位置和波束方向
         uav_info: list[tuple[np.ndarray, tuple[float, float]]] = []
         for uav in self._uavs:
             beam_dir = uav.get_final_beam_direction()
             uav_info.append((uav.pos, beam_dir))
         
-        # 为每个被服务的UE计算干扰
+        # 下行干扰 (UAV -> UE)
         for serving_uav_idx, uav in enumerate(self._uavs):
             for ue in uav.current_covered_ues:
-                total_interference: float = 0.0
-                
-                # 累加来自所有其他UAV的干扰
+                total_dl_interference: float = 0.0
                 for interferer_idx, (interferer_pos, interferer_beam) in enumerate(uav_info):
                     if interferer_idx == serving_uav_idx:
-                        continue  # 跳过服务UAV本身
-                    
-                    # 无关联UE的UAV不发射，不产生干扰
+                        continue
                     if len(self._uavs[interferer_idx].current_covered_ues) == 0:
                         continue
-                    
-                    # 计算该干扰UAV对此UE的全频带干扰功率（保守估计）
-                    interference = comms.calculate_interference_power(
-                        interferer_pos, ue.pos, interferer_beam
-                    )
-                    total_interference += interference
-                
-                ue.interference_power = total_interference
+                    total_dl_interference += comms.calculate_interference_power(
+                        interferer_pos, ue.pos, interferer_beam)
+                ue.interference_power = total_dl_interference
 
     def _get_rewards_and_metrics(self) -> tuple[list[float], tuple[float, float, float, float, dict]]:
         """Returns the reward and other metrics (latency, energy, jfi, total_rate, normalizer_stats).
@@ -430,9 +599,19 @@ class Env:
         2. 使用 RunningNormalizer 动态归一化到 ~N(0,1)
         3. 各分量乘以权重后相加
         """
-        total_latency: float = sum(ue.latency_current_request if ue.assigned else config.NON_SERVED_LATENCY_PENALTY for ue in self._ues)
+        # Latency metric: completed request uses its completion latency; otherwise use waiting time.
+        total_latency: float = 0.0
+        for ue in self._ues:
+            if ue.completed_this_step or ue.failed_this_step:
+                total_latency += ue.latency_current_request
+            elif ue.request_active:
+                age_slots = max(0, self._time_step - ue.request_start_step + 1)
+                total_latency += age_slots * config.TIME_SLOT_DURATION
+            else:
+                total_latency += 0.0
         total_energy: float = sum(uav.energy for uav in self._uavs)
-        total_rate: float = sum(uav.total_downlink_rate for uav in self._uavs)
+        # 吞吐量指标：从物理层带宽总和改为本时隙各链路实际成功交付的总速率 (Throughput)
+        total_rate: float = sum(uav.actual_throughput for uav in self._uavs)
         
         sc_metrics: np.ndarray = np.array([ue.service_coverage for ue in self._ues])
         jfi: float = 0.0
@@ -455,8 +634,8 @@ class Env:
         # 执行归一化（会更新统计量）
         r_latency: float = config.ALPHA_1 * self._latency_normalizer.normalize(log_latency)
         r_energy: float = config.ALPHA_2 * self._energy_normalizer.normalize(log_energy)
-        # JFI 使用固定映射：以 0.6 为中心，线性区间 [0.2, 1.0] 映射到 [-2, +2]
-        r_fairness: float = config.ALPHA_3 * np.clip((jfi - 0.6) * 5.0, -2.0, 2.0)
+        # JFI 使用固定映射：以 config.JFI_CENTER 为中心，线性范围对应映射到 [-2, +2]
+        r_fairness: float = config.ALPHA_3 * np.clip((jfi - config.JFI_CENTER) * config.JFI_SCALE, -2.0, 2.0)
         r_rate: float = config.ALPHA_RATE * self._rate_normalizer.normalize(log_rate)
         
         # 奖励 = 正向指标 - 负向指标
@@ -470,11 +649,25 @@ class Env:
         rewards = [r * config.REWARD_SCALING_FACTOR for r in rewards]
         
         # Collect normalizer states and reward components for debugging
+        completed_requests = sum(1 for ue in self._ues if ue.completed_this_step)
+        failed_requests = sum(1 for ue in self._ues if ue.failed_this_step)
         normalizer_stats = {
             # 原始指标（step级别，支持平均）
             "total_latency": total_latency,
             "total_energy": total_energy,
             "total_rate": total_rate,
+            "mbs_users_count": self._uavs[0]._num_mbs_users, # 统计 MBS 链路竞争激烈程度
+            # B1 丢包建模诊断：上一个时隙边界因 UE 离开覆盖而丢弃的比特量
+            "pending_bits_dropped_boundary": self._pending_bits_dropped_last_boundary,
+            "backlog_bits_dropped_boundary": self._backlog_bits_dropped_last_boundary,
+            "failed_requests_dropped_boundary": self._failed_requests_dropped_boundary,
+            # 超时诊断：因等待时间过长而丢弃的量
+            "pending_bits_dropped_timeout": self._pending_bits_dropped_timeout,
+            "backlog_bits_dropped_timeout": self._backlog_bits_dropped_timeout,
+            "failed_requests_dropped_timeout": self._failed_requests_dropped_timeout,
+            # 任务层诊断：本时隙请求完成/失败数量
+            "completed_requests": completed_requests,
+            "failed_requests": failed_requests,
             # 归一化时使用的统计量（*_used 后缀）
             "latency_norm_mean_used": latency_mean_used,
             "latency_norm_var_used": latency_var_used,

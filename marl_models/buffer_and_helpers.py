@@ -2,6 +2,7 @@ from marl_models.base_model import OffPolicyExperienceBatch
 import config
 import torch
 import numpy as np
+import typing
 from collections import deque
 from collections.abc import Generator
 
@@ -129,10 +130,25 @@ class RolloutBuffer:
         self.step = 0
 
 
-def soft_update(target_net: torch.nn.Module, source_net: torch.nn.Module, tau: float):
-    """Performs a soft update of the target network's parameters."""
+def soft_update(target: torch.nn.Module | typing.Iterable[torch.nn.Parameter], 
+                source: torch.nn.Module | typing.Iterable[torch.nn.Parameter], 
+                tau: float):
+    """Performs a soft update of the target network's parameters.
+    
+    Supports both nn.Module or direct parameter iterators (useful for partial updates).
+    """
+    if isinstance(target, torch.nn.Module):
+        target_params = target.parameters()
+    else:
+        target_params = target
+
+    if isinstance(source, torch.nn.Module):
+        source_params = source.parameters()
+    else:
+        source_params = source
+
     with torch.no_grad():
-        for target_param, param in zip(target_net.parameters(), source_net.parameters()):
+        for target_param, param in zip(target_params, source_params):
             target_param.copy_(tau * param + (1.0 - tau) * target_param)
 
 

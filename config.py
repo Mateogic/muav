@@ -59,7 +59,7 @@ assert MAX_ASSOCIATED_UES >= 1 and MAX_ASSOCIATED_UES <= NUM_UES
 USE_ATTENTION: bool = True  # 是否使用注意力机制处理可变长度 UE 列表
 ATTENTION_EMBED_DIM: int = 128  # UE 注意力的 embedding 维度 (heads=2, head_dim=64)
 ATTENTION_UAV_EMBED_DIM: int = 64  # UAV 状态的 embedding 维度
-ATTENTION_NEIGHBOR_DIM: int = 64  # Neighbor 注意力输出维度 (heads=2, head_dim=32)
+ATTENTION_NEIGHBOR_DIM: int = 128  # Neighbor 注意力输出维度 (heads=2, head_dim=64)
 ATTENTION_NUM_HEADS: int = 2  # 多头注意力的头数
 ATTENTION_DROPOUT: float = 0.1  # 注意力 dropout 率
 
@@ -117,14 +117,19 @@ BEAM_OFFSET_RANGE: float = 30.0          # offset模式下的最大偏移范围 
 
 # Model Parameters
 
+# Fairness and Service Criteria
+SUCCESS_BIT_THRESHOLD: float = 5000.0   # 时隙内传输比特数超过此值才计入“已服务”(Fairness)
+
 # Reward weights for multi-objective optimization
 # 使用动态归一化后，各分量量级一致，权重直接表达优先级
 # 初始设为 1:1:1:1，可根据训练结果调整
 ALPHA_1: float = 1.0  # weightage for latency (penalty)
-ALPHA_2: float = 0.8  # weightage for energy (penalty)
-ALPHA_3: float = 1.2  # weightage for fairness/JFI (reward)
+ALPHA_2: float = 1.0  # weightage for energy (penalty)
+ALPHA_3: float = 1.0  # weightage for fairness/JFI (reward)
 ALPHA_RATE: float = 1.0  # weightage for system throughput (reward)
 REWARD_SCALING_FACTOR: float = 0.12  # scaling factor for rewards (归一化后保持原量级)
+JFI_CENTER: float = 0.6  # JFI 奖励映射中心点
+JFI_SCALE: float = 5.0   # JFI 奖励映射缩放因子
 
 # UE state: pos(3) + file_id(1) + cache_hit(1) = 5
 UE_STATE_DIM: int = 5

@@ -197,9 +197,8 @@ def calculate_channel_gain(pos1: np.ndarray, pos2: np.ndarray,
     
     # 波束增益（仅 UAV-UE 链路有波束方向）
     if beam_direction is not None:
-        # 确定 UAV 位置（用于波束增益计算）
-        # 通常 pos1 是 UE，pos2 是 UAV（调用时的惯例）
-        # 但需要兼容两种调用顺序
+        # 约定：pos2 必须是 UAV 的 3D 位置，pos1 必须是 UE 的 3D 位置。
+        # _calculate_beam_gain 内部计算视角时依赖此顺序。
         beam_gain = _calculate_beam_gain(pos2, pos1, beam_direction)
     else:
         beam_gain = 1.0
@@ -213,29 +212,19 @@ def calculate_ue_uav_rate(channel_gain: float, num_associated_ues: int, interfer
     下行链路：UAV → UE，使用 OFDMA 多址方式。
     总功率限制模型：UAV 的总发射功率固定，OFDMA 时每个 UE 分得 1/N 的带宽和功率。
     
-    考虑同频干扰：其他UAV在相同频段发射的信号会对该UE造成干扰。
-    
-    OFDMA子载波级别SINR计算：
-    - 信号功率：P_tx/N × G_signal（服务UAV分配给该UE的功率）
-    - 噪声功率：σ²/N（子载波带宽上的热噪声）
-    - 干扰功率：I_total/N（干扰功率也分散在整个频带，只有1/N落入该子载波）
-    
-    SINR = (P/N × G) / (σ²/N + I/N) = (P × G) / (σ² + I)
-    
-    Args:
-        channel_gain: 服务UAV到UE的信道增益
-        num_associated_ues: 服务UAV关联的UE数量（用于OFDMA功率/带宽分配）
-        interference_power: 来自其他UAV的同频干扰功率总和（全频带）
-    
-    Returns:
-        下行数据速率 (bits/s)
+    统一子带噪声与干扰模型：
+    - 每个用户带宽: B/N
+    - 每个用户信号功率: P_tx/N * G
+    - 每个用户子带噪声: AWGN/N
+    - 每个用户子带干扰: I_total/N
+    - SINR = (P_tx/N * G) / (AWGN/N + I_total/N) = (P_tx * G) / (AWGN + I_total)
     """
     assert num_associated_ues != 0
     # OFDMA: 带宽平分给各 UE
     bandwidth_per_ue: float = config.BANDWIDTH_EDGE / num_associated_ues
-    # SINR计算：由于噪声和干扰也按1/N缩放，最终等价于使用全功率除以全频带噪声+干扰
-    # 这是OFDMA系统的标准特性：子载波SINR = 全频带SNR
-    sinr: float = (config.TRANSMIT_POWER * channel_gain) / (config.AWGN + interference_power)
+    
+    # 物理等价模型：子带 SINR = (P/N * G) / (AWGN/N + I/N) = (P * G) / (AWGN + I)
+    sinr: float = (config.TRANSMIT_POWER * channel_gain) / (config.AWGN + interference_power + config.EPSILON)
     return bandwidth_per_ue * np.log2(1 + sinr)
 
 
@@ -243,29 +232,48 @@ def calculate_ue_uav_uplink_rate(channel_gain: float, num_associated_ues: int) -
     """Calculates uplink data rate from UE to UAV.
     
     上行链路：UE → UAV，使用 UE 发射功率（通常远小于 UAV）。
+    
+    OFDMA 上行：
+    - 目标 UAV 内部正交：每个 UE 使用 B/N 的子带。
+    - 热噪声与带宽成正比：子带噪声功率为 AWGN / N。
     """
     assert num_associated_ues != 0
     bandwidth_per_ue: float = config.BANDWIDTH_EDGE / num_associated_ues
-    snr: float = (config.UE_TRANSMIT_POWER * channel_gain) / config.AWGN
+    # 物理等价模型：子带 SNR = (P_ue/N * G) / (AWGN/N) = (P_ue * G) / AWGN
+    snr: float = (config.UE_TRANSMIT_POWER * channel_gain) / (config.AWGN + config.EPSILON)
     return bandwidth_per_ue * np.log2(1 + snr)
 
 
-def calculate_uav_mbs_uplink_rate(channel_gain: float) -> float:
+def calculate_uav_mbs_uplink_rate(channel_gain: float, num_mbs_users: int = 1) -> float:
     """Calculates uplink data rate from UAV to MBS.
     
-    上行链路：UAV → MBS，使用 UAV 发射功率。
+    UAV-MBS 链路共享总带宽 BANDWIDTH_BACKHAUL。
+    每个 UAV 分配 B/N 带宽，噪声功率也缩放为 AWGN/N。
     """
-    snr: float = (config.TRANSMIT_POWER * channel_gain) / config.AWGN
-    return config.BANDWIDTH_BACKHAUL * np.log2(1 + snr)
+    num_mbs_users = max(1, num_mbs_users)
+    bandwidth_per_uav = config.BANDWIDTH_BACKHAUL / num_mbs_users
+    # 物理等价模型：子带 SNR = (P/N * G) / (AWGN/N) = (P * G) / AWGN
+    snr: float = (config.TRANSMIT_POWER * channel_gain) / (config.AWGN + config.EPSILON)
+    return bandwidth_per_uav * np.log2(1 + snr)
 
 
-def calculate_uav_mbs_downlink_rate(channel_gain: float) -> float:
+def calculate_uav_mbs_downlink_rate(channel_gain: float, num_mbs_users: int = 1) -> float:
     """Calculates downlink data rate from MBS to UAV.
     
     下行链路：MBS → UAV，使用 MBS 发射功率（远大于 UAV）。
+    总功率限制模型：MBS 总功率固定，OFDMA 时每个 UAV 分得 1/N 的带宽和功率。
+    
+    统一子带噪声模型：
+    - 每个用户带宽: B/N
+    - 每个用户功率: P_mbs/N
+    - 子带噪声功率: AWGN/N
+    - SINR = (P_mbs/N * G) / (AWGN/N) = (P_mbs * G) / AWGN
     """
-    snr: float = (config.MBS_TRANSMIT_POWER * channel_gain) / config.AWGN
-    return config.BANDWIDTH_BACKHAUL * np.log2(1 + snr)
+    num_mbs_users = max(1, num_mbs_users)
+    bandwidth_per_uav = config.BANDWIDTH_BACKHAUL / num_mbs_users
+    # 物理等价模型：子带 SNR = (P_mbs/N * G) / (AWGN/N) = (P_mbs * G) / AWGN
+    snr: float = (config.MBS_TRANSMIT_POWER * channel_gain) / (config.AWGN + config.EPSILON)
+    return bandwidth_per_uav * np.log2(1 + snr)
 
 
 def calculate_interference_power(interfering_uav_pos: np.ndarray, ue_pos: np.ndarray,
@@ -303,17 +311,19 @@ def calculate_uav_uav_rate(channel_gain: float, num_collaborating_uavs: int = 1)
     采用频分复用(FDM)：当一个UAV被多个邻居选为协作者时，带宽和功率都需要平分。
     这符合总功率限制模型：UAV 的总发射功率固定，FDM 时每条链路分得 1/N 的功率。
     
-    FDM 噪声缩放：由于每条链路使用独立的子频带 B/N，噪声功率也相应缩放为 σ²/N。
-    因此 SNR = (P/N × G) / (σ²/N) = (P × G) / σ²，与协作者数量无关。
+    物理一致性说明：
+    - 带宽分割: B/N
+    - 功率分割: P/N
+    - 噪声分割: AWGN/N (噪声功率与带宽成正比)
+    - SINR = (P/N * G) / (AWGN/N) = (P * G) / AWGN
     
     Args:
         channel_gain: 信道增益
         num_collaborating_uavs: 需要服务的协作UAV数量（被多少个UAV选为协作者）
     """
     assert num_collaborating_uavs >= 1
-    # FDM: 带宽和功率都平分给各链路，噪声也相应缩放
+    # FDM: 带宽平分给各链路
     bandwidth_per_link: float = config.BANDWIDTH_INTER / num_collaborating_uavs
-    # FDM 子频带噪声功率 = 总噪声功率 / N（噪声功率与带宽成正比）
-    # SNR = (P/N × G) / (σ²/N) = (P × G) / σ²
-    snr: float = (config.TRANSMIT_POWER * channel_gain) / config.AWGN
-    return bandwidth_per_link * np.log2(1 + snr)
+    # SINR: P/N 和 AWGN/N 中的 N 相互抵消
+    sinr: float = (config.TRANSMIT_POWER * channel_gain) / (config.AWGN + config.EPSILON)
+    return bandwidth_per_link * np.log2(1 + sinr)

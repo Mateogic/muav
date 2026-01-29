@@ -188,14 +188,12 @@ class MADDPG(MARLModel):
             # 修复 N×τ Bug: 共享编码器只更新一次（循环外）
             for i in range(self.num_agents):
                 soft_update(self.target_shared_encoders[i], self.shared_encoders[i], config.UPDATE_FACTOR)
-            # 各 Critic 的 MLP 部分分别更新（循环内）
+            # 各智能体 Actor 和 Critic (仅 MLP 部分) 分别更新
             for agent_idx in range(self.num_agents):
                 soft_update(self.target_actors[agent_idx], self.actors[agent_idx], config.UPDATE_FACTOR)
-                # 仅更新 MLP 参数，不包括共享编码器
-                with torch.no_grad():
-                    for target_param, param in zip(self.target_critics[agent_idx].mlp_parameters(), 
-                                                   self.critics[agent_idx].mlp_parameters()):
-                        target_param.copy_(config.UPDATE_FACTOR * param + (1.0 - config.UPDATE_FACTOR) * target_param)
+                # 仅更新 MLP 参数，不包括共享编码器（通过 mlp_parameters() 隔离）
+                soft_update(self.target_critics[agent_idx].mlp_parameters(), 
+                            self.critics[agent_idx].mlp_parameters(), config.UPDATE_FACTOR)
         else:
             # 原始 MLP 模式：正常更新所有参数
             for agent_idx in range(self.num_agents):
