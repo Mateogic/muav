@@ -311,3 +311,93 @@ class AttentionEncoder(nn.Module):
 
         # 拼接所有特征
         return torch.cat([uav_emb, ue_attn, neighbor_attn], dim=-1)
+
+
+class AgentPoolingAttention(nn.Module):
+    """
+    Agent 级别的 Permutation-Invariant 聚合模块
+    
+    将 N 个 agent 的特征聚合为固定维度输出，与 agent 数量无关。
+    使用 Self-Attention + Mean Pooling 实现置换不变性。
+    
+    架构：
+    1. 动作嵌入：[batch, N, action_dim] → [batch, N, action_embed_dim]
+    2. 特征拼接：[batch, N, encoder_dim + action_embed_dim]
+    3. Self-Attention：agents 之间信息交互
+    4. Mean Pooling：聚合为固定维度 [batch, output_dim]
+    
+    优势：
+    - Permutation-Invariant：对 agent 顺序不敏感
+    - 可扩展：输出维度与 N 无关，支持任意 agent 数量
+    """
+    
+    def __init__(self, encoder_dim: int = 256, action_dim: int = config.ACTION_DIM,
+                 action_embed_dim: int = 64, num_heads: int = 8, dropout: float = 0.1):
+        super().__init__()
+        
+        self.encoder_dim = encoder_dim
+        self.action_dim = action_dim
+        
+        # 动作嵌入层
+        self.action_embed = nn.Sequential(
+            layer_init(nn.Linear(action_dim, action_embed_dim)),
+            nn.LayerNorm(action_embed_dim),
+            nn.LeakyReLU(0.01)
+        )
+        
+        # Agent 特征维度 = encoder_dim + action_embed_dim
+        agent_feature_dim = encoder_dim + action_embed_dim
+        self.agent_feature_dim = agent_feature_dim
+        
+        # Self-Attention 层（agents 之间交互）
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=agent_feature_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.attn_norm = nn.LayerNorm(agent_feature_dim)
+        
+        # FFN 层（增强表达能力）
+        self.ffn = nn.Sequential(
+            layer_init(nn.Linear(agent_feature_dim, agent_feature_dim * 2)),
+            nn.LeakyReLU(0.01),
+            nn.Dropout(dropout),
+            layer_init(nn.Linear(agent_feature_dim * 2, agent_feature_dim))
+        )
+        self.ffn_norm = nn.LayerNorm(agent_feature_dim)
+        
+        # 输出维度与输入 encoder_dim 一致，便于与其他模块兼容
+        self.output_proj = layer_init(nn.Linear(agent_feature_dim, encoder_dim))
+        self.output_dim = encoder_dim
+    
+    def forward(self, agent_encodings: torch.Tensor, agent_actions: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            agent_encodings: [batch, N, encoder_dim] 所有 agent 的观测编码
+            agent_actions: [batch, N, action_dim] 所有 agent 的动作
+        
+        Returns:
+            pooled: [batch, output_dim] 聚合后的全局特征（与 N 无关）
+        """
+        batch_size, num_agents, _ = agent_encodings.shape
+        
+        # 1. 动作嵌入
+        action_emb = self.action_embed(agent_actions)  # [batch, N, action_embed_dim]
+        
+        # 2. 拼接观测编码和动作嵌入
+        agent_features = torch.cat([agent_encodings, action_emb], dim=-1)  # [batch, N, agent_feature_dim]
+        
+        # 3. Self-Attention（agents 交互）
+        attn_out, _ = self.self_attn(agent_features, agent_features, agent_features)
+        agent_features = self.attn_norm(agent_features + attn_out)  # 残差连接
+        
+        # 4. FFN
+        ffn_out = self.ffn(agent_features)
+        agent_features = self.ffn_norm(agent_features + ffn_out)  # 残差连接
+        
+        # 5. Mean Pooling（Permutation-Invariant 聚合）
+        pooled = agent_features.mean(dim=1)  # [batch, agent_feature_dim]
+        
+        # 6. 投影到输出维度
+        return self.output_proj(pooled)  # [batch, output_dim]

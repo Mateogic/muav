@@ -12,7 +12,7 @@ import numpy as np
 
 # 条件导入注意力模块
 if config.USE_ATTENTION:
-    from marl_models.attention import AttentionEncoder
+    from marl_models.attention import AttentionEncoder, AgentPoolingAttention
 
 
 def layer_init(layer: nn.Linear, std: float = np.sqrt(2), bias_const: float = 0.0) -> nn.Linear:
@@ -104,23 +104,36 @@ class ActorNetworkWithAttention(nn.Module):
 
 
 class CriticNetworkWithAttention(nn.Module):
-    """使用注意力机制的 Critic 网络"""
+    """使用注意力机制的 Critic 网络（Permutation-Invariant 版本）
+    
+    使用 AgentPoolingAttention 实现置换不变聚合：
+    - 输入维度与 agent 数量无关
+    - 支持通过复制权重扩展 agent 数量
+    - 所有 agent 共享同一个编码器
+    """
 
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, shared_encoders: nn.ModuleList) -> None:
+    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, shared_encoder: AttentionEncoder) -> None:
         super().__init__()
-        self.num_agents = num_agents
+        self.num_agents = num_agents  # 仅用于 encode_observations，不影响网络结构
         self.obs_dim = obs_dim
+        self.action_dim = action_dim
 
-        # 使用外部传入的共享编码器（所有Critic共享，避免参数爆炸）
-        self.encoders = shared_encoders
-        encoder_output_dim = self.encoders[0].output_dim  # 256
+        # 共享编码器
+        self.encoder = shared_encoder
+        encoder_output_dim = self.encoder.output_dim  # 256
 
-        # 总输入维度：所有 agent 的编码 + 所有 agent 的动作
-        total_encoded_dim = num_agents * encoder_output_dim
-        total_action_dim = num_agents * action_dim
+        # Permutation-Invariant 聚合模块（与 N 无关）
+        self.agent_pooling = AgentPoolingAttention(
+            encoder_dim=encoder_output_dim,
+            action_dim=action_dim,
+            action_embed_dim=64,
+            num_heads=4,
+            dropout=config.ATTENTION_DROPOUT
+        )
+        pooled_dim = self.agent_pooling.output_dim  # 256
 
-        # MLP 层（带残差连接）
-        self.fc1 = layer_init(nn.Linear(total_encoded_dim + total_action_dim, config.MLP_HIDDEN_DIM))
+        # MLP 层（输入维度固定，与 N 无关）
+        self.fc1 = layer_init(nn.Linear(pooled_dim, config.MLP_HIDDEN_DIM))
         self.ln1 = nn.LayerNorm(config.MLP_HIDDEN_DIM)
         self.fc2 = layer_init(nn.Linear(config.MLP_HIDDEN_DIM, config.MLP_HIDDEN_DIM))
         self.ln2 = nn.LayerNorm(config.MLP_HIDDEN_DIM)
@@ -130,33 +143,54 @@ class CriticNetworkWithAttention(nn.Module):
 
         self.activation = nn.LeakyReLU(0.01)
 
-    def encode_observations(self, joint_obs: torch.Tensor) -> torch.Tensor:
-        """Pre-compute encodings for all agents (optimization for MADDPG update loop)."""
+    def encode_observations(self, joint_obs: torch.Tensor, num_agents: int | None = None) -> torch.Tensor:
+        """编码所有 agent 的观测，返回 [batch, N, encoder_dim] 格式。
+        
+        Args:
+            joint_obs: [batch, N * obs_dim] 所有 agent 的观测（flat）
+            num_agents: agent 数量（可选，用于扩展场景）
+        
+        Returns:
+            encodings: [batch, N, encoder_dim] 编码结果（保持 agent 维度）
+        """
+        if num_agents is None:
+            num_agents = self.num_agents
+        
         batch_size = joint_obs.shape[0]
-        encodings = []
-        for i in range(self.num_agents):
-            agent_obs = joint_obs[:, i * self.obs_dim:(i + 1) * self.obs_dim]
-            encoded = self.encoders[i](agent_obs)
-            encodings.append(encoded)
-        return torch.cat(encodings, dim=-1)
+        # 批量化编码：将 [batch, N * obs_dim] 重塑为 [batch * N, obs_dim]，一次前向传播
+        reshaped = joint_obs.view(batch_size, num_agents, self.obs_dim).reshape(batch_size * num_agents, self.obs_dim)
+        encoded = self.encoder(reshaped)  # [batch * N, encoder_dim]
+        return encoded.view(batch_size, num_agents, -1)  # [batch, N, encoder_dim]
 
     def forward(self, joint_obs: torch.Tensor, joint_action: torch.Tensor, 
-                joint_encoded: torch.Tensor | None = None) -> torch.Tensor:
+                joint_encoded: torch.Tensor | None = None,
+                num_agents: int | None = None) -> torch.Tensor:
         """
         Args:
-            joint_obs: [batch, num_agents * obs_dim] 所有 agent 的观测
-            joint_action: [batch, num_agents * action_dim] 所有 agent 的动作
-            joint_encoded: [batch, num_agents * encoder_dim] 预计算的编码（可选）
+            joint_obs: [batch, N * obs_dim] 所有 agent 的观测（仅当 joint_encoded=None 时使用）
+            joint_action: [batch, N * action_dim] 所有 agent 的动作
+            joint_encoded: [batch, N, encoder_dim] 预计算的编码（可选）
+            num_agents: agent 数量（可选，用于扩展场景）
+        
+        Returns:
+            q_value: [batch, 1] Q 值
         """
-        # Use pre-computed encodings if provided, otherwise compute them
+        if num_agents is None:
+            num_agents = self.num_agents
+        
+        # 获取编码
         if joint_encoded is None:
-            joint_encoded = self.encode_observations(joint_obs)
-
-        # 拼接编码和动作
-        x = torch.cat([joint_encoded, joint_action], dim=-1)
+            joint_encoded = self.encode_observations(joint_obs, num_agents)
+        
+        # 重塑动作为 [batch, N, action_dim]
+        batch_size = joint_encoded.shape[0]
+        actions_reshaped = joint_action.view(batch_size, num_agents, self.action_dim)
+        
+        # Permutation-Invariant 聚合
+        pooled = self.agent_pooling(joint_encoded, actions_reshaped)  # [batch, pooled_dim]
 
         # MLP 处理（带残差连接）
-        x = self.activation(self.ln1(self.fc1(x)))
+        x = self.activation(self.ln1(self.fc1(pooled)))
         residual = x
         x = self.activation(self.ln2(self.fc2(x)))
         x = x + residual
@@ -167,8 +201,16 @@ class CriticNetworkWithAttention(nn.Module):
         return self.out(x)
     
     def mlp_parameters(self):
-        """返回仅属于 MLP 的参数（不包括共享编码器）"""
-        return list(self.fc1.parameters()) + list(self.ln1.parameters()) + \
-               list(self.fc2.parameters()) + list(self.ln2.parameters()) + \
-               list(self.fc3.parameters()) + list(self.ln3.parameters()) + \
-               list(self.out.parameters())
+        """返回仅属于 MLP 和 pooling 的参数（不包括共享编码器）"""
+        params = []
+        # AgentPoolingAttention 参数
+        params.extend(self.agent_pooling.parameters())
+        # MLP 参数
+        params.extend(self.fc1.parameters())
+        params.extend(self.ln1.parameters())
+        params.extend(self.fc2.parameters())
+        params.extend(self.ln2.parameters())
+        params.extend(self.fc3.parameters())
+        params.extend(self.ln3.parameters())
+        params.extend(self.out.parameters())
+        return params
