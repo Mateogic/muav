@@ -199,6 +199,13 @@ class UAV:
 
         best_collaborators: list[UAV] = []
         missing_requested_files: np.ndarray = self._current_requested_files & (~self.cache)
+
+        # Hard gate: only collaborate when there is at least one missing file.
+        # If all requested files are already cached locally, collaboration is unnecessary.
+        if not np.any(missing_requested_files):
+            self._current_collaborator = None
+            return
+
         max_missing_overlap: int = -1
 
         # Find neighbors with maximum overlap
@@ -209,6 +216,12 @@ class UAV:
                 best_collaborators = [neighbor]
             elif overlap == max_missing_overlap:
                 best_collaborators.append(neighbor)
+
+        # Hard gate: if no neighbor can provide any missing file, do not collaborate.
+        # This avoids the extra UAV->UAV->MBS hop that only increases delay.
+        if max_missing_overlap <= 0:
+            self._current_collaborator = None
+            return
 
         # If only one best collaborator, select it
         if len(best_collaborators) == 1:
