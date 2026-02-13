@@ -46,7 +46,7 @@ FAIRNESS_WINDOW_SIZE: int = 100  # 公平性计算的滑动窗口大小（最近
 # Collision Avoidance and Penalties
 COLLISION_AVOIDANCE_ITERATIONS: int = 20  # number of iterations to resolve collisions
 COLLISION_PENALTY: float = 1.5
-BOUNDARY_PENALTY: float = 2.0
+BOUNDARY_PENALTY: float = 2.5
 NON_SERVED_LATENCY_PENALTY: float = 60.0  # penalty in latency for non-served requests
 # IMPORTANT : Reconfigurable, should try for various values including : NUM_UAVS - 1 and NUM_UES
 MAX_UAV_NEIGHBORS: int = min(4, NUM_UAVS - 1)
@@ -121,8 +121,8 @@ BEAM_OFFSET_RANGE: float = 30.0          # offset模式下的最大偏移范围 
 # 使用动态归一化后，各分量量级一致，权重直接表达优先级
 # 初始设为 1:1:1:1，可根据训练结果调整
 ALPHA_1: float = 1.0  # weightage for latency (penalty)
-ALPHA_2: float = 0.8  # weightage for energy (penalty)
-ALPHA_3: float = 1.2  # weightage for fairness/JFI (reward)
+ALPHA_2: float = 0.85  # weightage for energy (penalty)
+ALPHA_3: float = 1.15  # weightage for fairness/JFI (reward)
 ALPHA_RATE: float = 1.0  # weightage for system throughput (reward)
 REWARD_SCALING_FACTOR: float = 0.12  # scaling factor for rewards (归一化后保持原量级)
 
@@ -150,7 +150,7 @@ ACTOR_LR: float = 1e-4
 CRITIC_LR: float = 2e-4
 DISCOUNT_FACTOR: float = 0.99  # gamma
 UPDATE_FACTOR: float = 0.001  # tau
-MAX_GRAD_NORM: float = 10.0  # maximum norm for gradient clipping to prevent exploding gradients
+MAX_GRAD_NORM: float = 8.0  # maximum norm for gradient clipping to prevent exploding gradients
 LOG_STD_MAX: float = 2  # maximum log standard deviation for stochastic policies
 LOG_STD_MIN: float = -20  # minimum log standard deviation for stochastic policies
 EPSILON: float = 1e-9  # small value to prevent division by zero
@@ -159,7 +159,7 @@ EPSILON: float = 1e-9  # small value to prevent division by zero
 REPLAY_BUFFER_SIZE: int = 6 * 10**5  # B，大概包含前500个episode的数据
 REPLAY_BATCH_SIZE: int = 1024  # minibatch size (increased from 64 for better GPU utilization)
 INITIAL_RANDOM_STEPS: int = 40000  # steps of random actions for exploration
-LEARN_FREQ: int = 10  # steps to learn after
+LEARN_FREQ: int = 8  # steps to learn after
 
 # Gaussian Noise Parameters (for MADDPG and MATD3)
 INITIAL_NOISE_SCALE: float = 0.2
